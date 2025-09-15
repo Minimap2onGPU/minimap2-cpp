@@ -1,9 +1,9 @@
-CXXFLAGS=	-g -Wall -O2 -Wextra
+CXXFLAGS=	-g -Wall -O2 -Wextra -std=c++20
 CPPFLAGS=	-DHAVE_KALLOC
-INCLUDES=
+INCLUDES=	-Isrc
 OBJS=		kthread.o kalloc.o misc.o bseq.o sketch.o sdust.o options.o index.o \
 			lchain.o align.o hit.o seed.o jump.o map.o format.o pe.o esterr.o splitidx.o \
-			ksw2_ll_sse.o
+			ksw2_ll_sse.o src/file_reader.o src/types.o
 PROG=		minimap2
 PROG_EXTRA=	sdust minimap2-lite
 LIBS=		-lm -lz -lpthread
@@ -44,9 +44,15 @@ endif
 .c.o:
 		$(CXX) -c $(CXXFLAGS) $(CPPFLAGS) $(INCLUDES) $< -o $@
 
+.cpp.o:
+		$(CXX) -c $(CXXFLAGS) $(CPPFLAGS) $(INCLUDES) $< -o $@
+
 all:$(PROG)
 
 extra:all $(PROG_EXTRA)
+
+debug: CXXFLAGS += -O0 -DDEBUG
+debug: clean minimap2
 
 minimap2:main.o libminimap2.a
 		$(CXX) $(CXXFLAGS) main.o -o $@ -L. -lminimap2 $(LIBS)
@@ -135,3 +141,5 @@ sdust.o: kalloc.h kdq.h kvec.h sdust.h
 seed.o: mmpriv.h minimap.h bseq.h kseq.h kalloc.h ksort.h
 sketch.o: kvec.h kalloc.h mmpriv.h minimap.h bseq.h kseq.h
 splitidx.o: mmpriv.h minimap.h bseq.h kseq.h
+file_reader.o: src/file_reader.hpp
+types.o: src/types.hpp
