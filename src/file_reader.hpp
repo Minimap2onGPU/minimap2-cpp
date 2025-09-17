@@ -2,37 +2,54 @@
 #include <string>
 #include <fstream>
 #include <memory>
+#include <unordered_set>
 #include "types.hpp"
 
 using std::ifstream;
 using std::shared_ptr;
+using std::string;
+using std::unordered_set;
 using std::vector;
+
+struct FileReaderConfig
+{
+    bool enable_quality;
+    bool enable_comment;
+    bool fragment_mode;
+};
 
 class FileReader
 {
     static constexpr char FASTA = '>';
     static constexpr char FASTQ = '@';
+    static constexpr char FASTQ_COMMENT = '+';
     static constexpr int NUM_LINES_FASTQ_READ = 4;
+    static inline unordered_set<char> TYPES = {FASTA, FASTQ};
 
+    InputSegment buffer;
+    FileReaderConfig config;
     vector<ifstream> filestreams;
+    vector<char> filetypes;
 
-    // EFFECT: parse a single read from <filestream> if possible
-    // RETURNS: size of read parsed
+    // EFFECT: loads a single read from <filestream> into buffer
+    // NOTE: buffer.valid == false if read fails
     // supported types:
     // 1. FASTA: https://en.wikipedia.org/wiki/FASTA_format
     // 2. FASTQ: https://en.wikipedia.org/wiki/FASTQ_format
-    size_t parseOneRead(ifstream &filestream, shared_ptr<FragmentedData> data);
+    void loadOneReadIntoBuffer(ifstream &filestream);
 
     // EFFECT: convert to a base sequence
     // changes u/U to t/T
     void convertToBaseSequence(string &sequence);
 
 public:
-
-    FileReader(const vector<string> &files);
+    FileReader(const vector<string> &files, const FileReaderConfig &config_in);
     ~FileReader();
 
     // EFFECT: reads segments across files until maxData reached or eof reached
-    // ensures that each segment from each file is either all read, or all ignored
-    shared_ptr<FragmentedData> readAllSegments(size_t maxData);
+    // single file:
+    //  - if fragment_mode, groups the same name reads into a single fragment
+    // multi files:
+    //  - ensures that each segment from each file is either all read, or all ignored
+    shared_ptr<InputDataFragments> readAllSegments(size_t max_data_size);
 };

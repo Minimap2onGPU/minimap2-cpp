@@ -4,6 +4,8 @@
 #include <cerrno>
 #include <memory>
 #include <iostream>
+#include <chrono>
+
 #include "kthread.h"
 #include "kvec.h"
 #include "kalloc.h"
@@ -12,9 +14,11 @@
 #include "bseq.h"
 #include "khash.h"
 #include "src/file_reader.hpp"
+#include "src/types.hpp"
 
 using std::cout;
 using std::endl;
+using std::make_shared;
 
 mm_tbuf_t *mm_tbuf_init(void)
 {
@@ -513,6 +517,15 @@ struct pipeline_t
 	std::unique_ptr<FileReader> fileReader;
 };
 
+////////
+struct WorkerData
+{
+	const shared_ptr<pipeline_t> pipeline_config;
+	shared_ptr<InputDataFragments> input;
+	shared_ptr<MappingOutputs> output;
+};
+////////
+
 typedef struct
 {
 	const pipeline_t *p;
@@ -521,7 +534,12 @@ typedef struct
 	int *n_reg, *seg_off, *n_seg, *rep_len, *frag_gap;
 	mm_reg1_t **reg;
 	mm_tbuf_t **buf;
+
+	// TODO: move this to its own struct initialized in step 0
+	WorkerData* tmp_worker_data;
 } step_t;
+
+
 
 static void worker_for(void *_data, long i, int tid) // kt_for() callback
 {
@@ -671,19 +689,58 @@ static void *worker_pipeline(void *shared, int step, void *in)
 		int frag_mode = (p->n_fp > 1 || !!(p->opt->flag & MM_F_FRAG_MODE));
 		step_t *s;
 		s = (step_t *)calloc(1, sizeof(step_t));
-		shared_ptr<FragmentedData> data;
+		/////////
+		auto worker_data = new WorkerData(); // TODO: change to smart ptr once kt_pipeline fixed
+		/////////
+		cout << "reading files\n\n";
+		auto start = std::chrono::high_resolution_clock::now();
 		if (p->n_fp > 1)
 		{
 			s->seq = mm_bseq_read_frag2(p->n_fp, p->fp, p->mini_batch_size, with_qual, with_comment, &s->n_seq);
-			data = p->fileReader->readAllSegments(p->mini_batch_size);
 		}
 		else
 		{
 			s->seq = mm_bseq_read3(p->fp[0], p->mini_batch_size, with_qual, with_comment, frag_mode, &s->n_seq);
-			data = p->fileReader->readAllSegments(p->mini_batch_size);
 		}
-		assert(data->input.sequences.size() == s->n_seq);
-
+		cout << "Done with regular: " << (std::chrono::high_resolution_clock::now() - start).count() << endl;
+		start = std::chrono::high_resolution_clock::now();
+		////////
+		// make input
+		worker_data->input = p->fileReader->readAllSegments(p->mini_batch_size);
+		////////
+		cout << "Done with modified: " << (std::chrono::high_resolution_clock::now() - start).count() << endl;
+		cout << worker_data->input->segments.sequences.size() << endl;
+		assert(worker_data->input->segments.sequences.size() == s->n_seq);
+		auto validateRes = [&]
+		{
+			for (int i = 0; i < worker_data->input->segments.sequences.size(); ++i)
+			{
+				assert(s->seq[i].seq == worker_data->input->segments.sequences[i]);
+				if (s->seq[i].name != nullptr)
+				{
+					assert(s->seq[i].name == worker_data->input->segments.names[i]);
+				}
+				if (s->seq[i].comment != nullptr)
+				{
+					assert(s->seq[i].comment == worker_data->input->segments.comments[i]);
+				}
+				if (s->seq[i].qual != nullptr)
+				{
+					assert(s->seq[i].qual == worker_data->input->segments.qualities[i]);
+				}
+			}
+		};
+		validateRes();
+		// C++ implementation is about 20% slower than the C implementation in reading
+		/////////
+		if (worker_data->input != nullptr)
+		{
+			worker_data->output = make_shared<MappingOutputs>();
+			size_t total_segments = worker_data->input->segments.sequences.size();
+			worker_data->output->resizeAll(total_segments);
+			// TODO: p->n_processed = total_segments; once below code is removed
+		}
+		/////////
 		if (s->seq)
 		{
 			s->p = p;
@@ -705,6 +762,17 @@ static void *worker_pipeline(void *shared, int step, void *in)
 					s->seg_off[s->n_frag++] = j;
 					j = i;
 				}
+
+			auto validateSegments = [&]()
+			{
+				for (int i = 0; i < worker_data->input->segment_offsets.size() - 1; ++i)
+				{
+					assert(worker_data->input->segment_offsets[i] == s->seg_off[i]);
+					assert(worker_data->input->getNumsegmentsInFragment(i) == s->n_seg[i]);
+				}
+			};
+			validateSegments();
+			s->tmp_worker_data = worker_data;
 			return s;
 		}
 		else
@@ -837,12 +905,16 @@ int mm_map_file_frag(const mm_idx_t *idx, int n_segs, const char **fn, const mm_
 	if (n_segs < 1)
 		return -1;
 	memset(&pl, 0, sizeof(pipeline_t));
-	vector<string> files;
-	for (int i = 0; i < n_segs; ++i)
-	{
-		files.emplace_back(fn[i]);
-	}
-	pl.fileReader = make_unique<FileReader>(files);
+
+	////////
+	std::vector<std::string> files(fn, fn + n_segs);
+	FileReaderConfig config = {
+		.enable_quality = opt->flag & MM_F_OUT_SAM && !(opt->flag & MM_F_NO_QUAL),
+		.enable_comment = opt->flag & MM_F_COPY_COMMENT,
+		.fragment_mode = opt->flag & MM_F_FRAG_MODE,
+	};
+	pl.fileReader = make_unique<FileReader>(files, config);
+	////////
 
 	pl.n_fp = n_segs;
 	pl.fp = open_bseqs(pl.n_fp, fn);

@@ -1,6 +1,6 @@
 CXXFLAGS=	-g -Wall -O2 -Wextra -std=c++20
 CPPFLAGS=	-DHAVE_KALLOC
-INCLUDES=	-Isrc
+INCLUDES=	-I. -Isrc
 OBJS=		kthread.o kalloc.o misc.o bseq.o sketch.o sdust.o options.o index.o \
 			lchain.o align.o hit.o seed.o jump.o map.o format.o pe.o esterr.o splitidx.o \
 			ksw2_ll_sse.o src/file_reader.o src/types.o
