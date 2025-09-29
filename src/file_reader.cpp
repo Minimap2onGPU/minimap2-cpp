@@ -21,7 +21,7 @@ shared_ptr<InputDataFragments> FileReader::readAllSegments(size_t max_data_size)
         }
     }
     auto data = make_shared<InputDataFragments>();
-    data->segment_offsets.push_back(0);
+    data->fragment_index.push_back(0);
     bool group_segments_by_name = config.fragment_mode && filestreams.size() == 1;
     size_t total_size = 0, fragment_size = 0;
     vector<InputSegment> inputs(filestreams.size());
@@ -73,7 +73,7 @@ shared_ptr<InputDataFragments> FileReader::readAllSegments(size_t max_data_size)
         assert(fragment_size != 0);
         assert(count != 0);
         total_size += fragment_size;
-        data->segment_offsets.push_back(data->segment_offsets.back() + count);
+        data->fragment_index.push_back(data->fragment_index.back() + count);
         if (group_segments_by_name && !buffer.valid)
         {
             cout << "EOF reached before filling data\n";

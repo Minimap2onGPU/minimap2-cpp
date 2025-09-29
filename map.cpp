@@ -15,6 +15,17 @@
 #include "khash.h"
 #include "src/file_reader.hpp"
 #include "src/types.hpp"
+#include "src/mapper.hpp"
+#include "src/seed/seeder.hpp"
+
+////////
+struct WorkerData
+{
+	shared_ptr<InputDataFragments> input;
+	shared_ptr<MappingOutputData> output;
+	shared_ptr<MappingContext> context;
+};
+////////
 
 using std::cout;
 using std::endl;
@@ -479,6 +490,7 @@ void mm_map_frag(const mm_idx_t *mi, int n_segs, const int *qlens, const char **
 {
 	if ((opt->flag & MM_F_WEAK_PAIRING) && n_segs == 2 && opt->pe_ori >= 0 && (opt->flag & MM_F_CIGAR))
 	{
+		// can assert independent_flag not set -> important since mapper only allocates enough space per fragment
 		int i;
 		for (i = 0; i < n_segs; ++i)
 			mm_map_frag_core(mi, 1, &qlens[i], &seqs[i], &n_regs[i], &regs[i], b, opt, qname);
@@ -514,17 +526,8 @@ struct pipeline_t
 	uint32_t *rid_shift;
 	FILE *fp_split, **fp_parts;
 
-	std::unique_ptr<FileReader> fileReader;
+	std::unique_ptr<FileReader> file_reader;
 };
-
-////////
-struct WorkerData
-{
-	const shared_ptr<pipeline_t> pipeline_config;
-	shared_ptr<InputDataFragments> input;
-	shared_ptr<MappingOutputs> output;
-};
-////////
 
 typedef struct
 {
@@ -536,14 +539,17 @@ typedef struct
 	mm_tbuf_t **buf;
 
 	// TODO: move this to its own struct initialized in step 0
-	WorkerData* tmp_worker_data;
+	WorkerData *tmp_worker_data;
 } step_t;
 
-
-
+// map a single data for fragment i
 static void worker_for(void *_data, long i, int tid) // kt_for() callback
 {
 	step_t *s = (step_t *)_data;
+	////////
+	WorkerData *worker_data = s->tmp_worker_data; // NOTE: we temporarily flip outside the function
+	// TODO: test collect minimizer
+	////////
 	int qlens[MM_MAX_SEG], j, off = s->seg_off[i], pe_ori = s->p->opt->pe_ori;
 	const char *qseqs[MM_MAX_SEG];
 	double t = 0.0;
@@ -556,22 +562,78 @@ static void worker_for(void *_data, long i, int tid) // kt_for() callback
 	}
 	for (j = 0; j < s->n_seg[i]; ++j)
 	{
-		if (s->n_seg[i] == 2 && ((j == 0 && (pe_ori >> 1 & 1)) || (j == 1 && (pe_ori & 1))))
+		if (s->n_seg[i] == 2 && ((j == 0 && (pe_ori >> 1 & 1)) || (j == 1 && (pe_ori & 1)))) // flip condition
 			mm_revcomp_bseq(&s->seq[off + j]);
 		qlens[j] = s->seq[off + j].l_seq;
 		qseqs[j] = s->seq[off + j].seq;
 	}
-	if (s->p->opt->flag & MM_F_INDEPEND_SEG)
+	///// TODO: rm this once tested ///
+	auto validateFlipStrands = [&]()
+	{
+		for (j = 0; j < s->n_seg[i]; ++j)
+		{
+			assert(qseqs[j] == worker_data->input->segments.sequences[i]);
+			if (s->seq[off + j].qual != nullptr)
+			{
+				assert(s->seq[off + j].qual == worker_data->input->segments.qualities[i]);
+			}
+		}
+	};
+	validateFlipStrands();
+	///////////////////////////////
+
+	// actual seed, chain, align
+	if (s->p->opt->flag & MM_F_INDEPEND_SEG) // every segment considered on its own -> allocate intermediate outputs per segment
 	{
 		for (j = 0; j < s->n_seg[i]; ++j)
 		{
 			mm_map_frag(s->p->mi, 1, &qlens[j], &qseqs[j], &s->n_reg[off + j], &s->reg[off + j], b, s->p->opt, s->seq[off + j].name);
 			s->rep_len[off + j] = b->rep_len;
 			s->frag_gap[off + j] = b->frag_gap;
+			
 		}
 	}
-	else
-	{
+	else // consider per fragment -> allocate intermediate outputs per fragment
+	{	 // NOTE: if opt->flag & MM_F_WEAK_PAIRING) && n_segs == 2 && opt->pe_ori >= 0 && (opt->flag & MM_F_CIGAR)
+		//  -> need to allocate per segment and not fragment
+		// TODO: rm after test
+		mm128_v mv = {0, 0, 0};
+		// int j, n, sum = 0;
+		// Seeder seeder(worker_data->context);
+		// auto &minimizer_output = worker_data->context->output->intermediate_output.minimizers[i];
+		// int start_index = worker_data->context->input->fragment_index[i];
+        // // Generate minimizers for this segment
+        
+		// for (j = n = 0; j < s->n_seg[i]; ++j)
+		// {
+		// 	mm_sketch(nullptr, qseqs[j], qlens[j], s->p->mi->w, s->p->mi->k, j, s->p->mi->flag & MM_I_HPC, &mv);
+		// 	const string &sequence = worker_data->context->input->segments.sequences[start_index + j];
+		// 	assert(qseqs[j] == sequence);
+		// 	seeder.sketch(sequence, j, minimizer_output);
+		// 	int num_minimizers = minimizer_output.size();
+		// 	assert(num_minimizers == mv.n);
+		// 	for(int k = 0; k < num_minimizers; ++k){
+		// 		assert(mv.a[k].x == minimizer_output[k].x);
+		// 		assert(mv.a[k].y == minimizer_output[k].y);
+		// 	}
+		// 	for (int k = n; k < mv.n; ++k)
+		// 		mv.a[k].y += sum << 1;
+		// 	if (s->p->opt->sdust_thres > 0) // mask low-complexity minimizers
+		// 		mv.n = n + mm_dust_minier(nullptr, mv.n - n, mv.a + n, qlens[j], qseqs[j], s->p->opt->sdust_thres);
+		// 	sum += qlens[j], n = mv.n;
+		// }
+
+		collect_minimizers(nullptr, s->p->opt, s->p->mi, s->n_seg[i], qlens, qseqs, &mv);
+		Seeder seeder(worker_data->context);
+		seeder.collect_minimizers(i);
+		const auto& minimizers = worker_data->context->output->intermediate_output.minimizers[i];
+		int num_minimizers = worker_data->context->output->intermediate_output.minimizers[i].size();
+		assert(num_minimizers == mv.n);
+		for(int i = 0; i < num_minimizers; ++i){
+			assert(mv.a[i].x == minimizers[i].x);
+			assert(mv.a[i].y == minimizers[i].y);
+		}
+		//////////////////////////
 		mm_map_frag(s->p->mi, s->n_seg[i], qlens, qseqs, &s->n_reg[off], &s->reg[off], b, s->p->opt, s->seq[off].name);
 		for (j = 0; j < s->n_seg[i]; ++j)
 		{
@@ -579,6 +641,8 @@ static void worker_for(void *_data, long i, int tid) // kt_for() callback
 			s->frag_gap[off + j] = b->frag_gap;
 		}
 	}
+
+	// flip back the strand
 	for (j = 0; j < s->n_seg[i]; ++j) // flip the query strand and coordinate to the original read strand
 		if (s->n_seg[i] == 2 && ((j == 0 && (pe_ori >> 1 & 1)) || (j == 1 && (pe_ori & 1))))
 		{
@@ -706,13 +770,13 @@ static void *worker_pipeline(void *shared, int step, void *in)
 		start = std::chrono::high_resolution_clock::now();
 		////////
 		// make input
-		worker_data->input = p->fileReader->readAllSegments(p->mini_batch_size);
+		worker_data->input = p->file_reader->readAllSegments(p->mini_batch_size);
 		////////
 		cout << "Done with modified: " << (std::chrono::high_resolution_clock::now() - start).count() << endl;
 		cout << worker_data->input->segments.sequences.size() << endl;
-		assert(worker_data->input->segments.sequences.size() == s->n_seq);
 		auto validateRes = [&]
 		{
+			assert(worker_data->input->segments.sequences.size() == s->n_seq);
 			for (int i = 0; i < worker_data->input->segments.sequences.size(); ++i)
 			{
 				assert(s->seq[i].seq == worker_data->input->segments.sequences[i]);
@@ -735,11 +799,25 @@ static void *worker_pipeline(void *shared, int step, void *in)
 		/////////
 		if (worker_data->input != nullptr)
 		{
-			worker_data->output = make_shared<MappingOutputs>();
+			worker_data->output = make_shared<MappingOutputData>();
 			size_t total_segments = worker_data->input->segments.sequences.size();
-			worker_data->output->resizeAll(total_segments);
-			// TODO: p->n_processed = total_segments; once below code is removed
+			worker_data->output->final_output.resize(total_segments); // each segment has a final output
+																	  // NOTE: we resize intermediate outputs in the Mapper.map() itself
+																	  // TODO: p->n_processed = total_segments; once below code is removed
 		}
+		// init map context
+		MapperConfig cfg = {
+			.paired_end_orientation = bitset<2>(p->opt->pe_ori),
+			.independent_segments = static_cast<bool>(p->opt->flag & MM_F_INDEPEND_SEG),
+			.is_hpc = static_cast<bool>(p->opt->flag & MM_I_HPC),
+			.sdust_threshold = p->opt->sdust_thres,
+		};
+		worker_data->context = make_shared<MappingContext>(
+			cfg,
+			shared_ptr<mm_idx_t>(const_cast<mm_idx_t *>(p->mi), [](mm_idx_t *) {}),
+			worker_data->input,
+			worker_data->output);
+		
 		/////////
 		if (s->seq)
 		{
@@ -765,9 +843,9 @@ static void *worker_pipeline(void *shared, int step, void *in)
 
 			auto validateSegments = [&]()
 			{
-				for (int i = 0; i < worker_data->input->segment_offsets.size() - 1; ++i)
+				for (int i = 0; i < worker_data->input->fragment_index.size() - 1; ++i)
 				{
-					assert(worker_data->input->segment_offsets[i] == s->seg_off[i]);
+					assert(worker_data->input->fragment_index[i] == s->seg_off[i]);
 					assert(worker_data->input->getNumsegmentsInFragment(i) == s->n_seg[i]);
 				}
 			};
@@ -783,7 +861,21 @@ static void *worker_pipeline(void *shared, int step, void *in)
 		if (p->n_parts > 0)
 			merge_hits((step_t *)in);
 		else
-			kt_for(p->n_threads, worker_for, in, ((step_t *)in)->n_frag);
+		{
+
+			auto data = (step_t *)in;
+			// TODO: rm once done with test -> tmp reverse all paired_end reads
+			Mapper mapper;
+			mapper.reverseComplements(data->tmp_worker_data->context);
+			data->tmp_worker_data->output->intermediate_output.resize(data->n_frag);
+			///////////////
+			kt_for(p->n_threads, worker_for, data, data->n_frag);
+
+			// auto tmp_worker = data->tmp_worker_data;
+
+			// mapper.map(tmp_worker->context);
+		}
+
 		return in;
 	}
 	else if (step == 2)
@@ -913,9 +1005,9 @@ int mm_map_file_frag(const mm_idx_t *idx, int n_segs, const char **fn, const mm_
 		.enable_comment = opt->flag & MM_F_COPY_COMMENT,
 		.fragment_mode = opt->flag & MM_F_FRAG_MODE,
 	};
-	pl.fileReader = make_unique<FileReader>(files, config);
+	pl.file_reader = make_unique<FileReader>(files, config);
 	////////
-
+	// FUTURE WORK: clean up pipeline approach?
 	pl.n_fp = n_segs;
 	pl.fp = open_bseqs(pl.n_fp, fn);
 	if (pl.fp == 0)

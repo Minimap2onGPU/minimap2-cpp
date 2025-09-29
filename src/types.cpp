@@ -30,24 +30,31 @@ void InputSegments::popBack()
 
 pair<int, int> InputDataFragments::getOffset(int fragment)
 {
-    assert(fragment >= 0 && fragment < segment_offsets.size() - 1);
-    return {segment_offsets[fragment], segment_offsets[fragment + 1]};
+    assert(fragment >= 0 && fragment < fragment_index.size() - 1);
+    return {fragment_index[fragment], fragment_index[fragment + 1]};
 }
 
-int InputDataFragments::getNumsegmentsInFragment(int fragment){
+int InputDataFragments::getNumsegmentsInFragment(int fragment)
+{
     auto [start, end] = getOffset(fragment);
     return end - start;
 }
 
-void MappingOutputs::resizeAll(const size_t size)
+int InputDataFragments::getNumFragments()
+{
+    return fragment_index.back();
+}
+
+void MappingOutputData::FinalOutput::resize(const size_t size)
 {
     representative_lengths.resize(size);
     fragment_gaps.resize(size);
-
-    minimizer_positions.resize(size);
-    anchors.resize(size);
-
-    chain_scores.resize(size);
-
     regions.resize(size);
+}
+
+void MappingOutputData::IntermediateOutput::resize(const size_t size)
+{
+    minimizers.resize(size);
+    anchors.resize(size);
+    chain_scores.resize(size);
 }
