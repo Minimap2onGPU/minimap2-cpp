@@ -17,6 +17,8 @@
 #include "src/types.hpp"
 #include "src/mapper.hpp"
 #include "src/seed/seeder.hpp"
+#include "src/utils.hpp"
+#include <unordered_map>
 
 ////////
 struct WorkerData
@@ -590,49 +592,107 @@ static void worker_for(void *_data, long i, int tid) // kt_for() callback
 			mm_map_frag(s->p->mi, 1, &qlens[j], &qseqs[j], &s->n_reg[off + j], &s->reg[off + j], b, s->p->opt, s->seq[off + j].name);
 			s->rep_len[off + j] = b->rep_len;
 			s->frag_gap[off + j] = b->frag_gap;
-			
 		}
 	}
 	else // consider per fragment -> allocate intermediate outputs per fragment
 	{	 // NOTE: if opt->flag & MM_F_WEAK_PAIRING) && n_segs == 2 && opt->pe_ori >= 0 && (opt->flag & MM_F_CIGAR)
 		//  -> need to allocate per segment and not fragment
 		// TODO: rm after test
+
+		// C style
 		mm128_v mv = {0, 0, 0};
-		// int j, n, sum = 0;
-		// Seeder seeder(worker_data->context);
-		// auto &minimizer_output = worker_data->context->output->intermediate_output.minimizers[i];
-		// int start_index = worker_data->context->input->fragment_index[i];
-        // // Generate minimizers for this segment
-        
-		// for (j = n = 0; j < s->n_seg[i]; ++j)
+		collect_minimizers(nullptr, s->p->opt, s->p->mi, s->n_seg[i], qlens, qseqs, &mv);
+		mm_seed_mz_flt(nullptr, &mv, s->p->opt->mid_occ, s->p->opt->q_occ_frac);
+		int qlen_sum_old = 0, qlen_sum = worker_data->context->input->fragment_lengths[i];
+		for (int j = 0; j < s->n_seg[i]; ++j)
+		{
+			qlen_sum_old += qlens[j];
+		}
+		int64_t n_a;
+		int rep_len, n_mini_pos;
+		uint64_t *mini_pos;
+		mm_seed_t *m;
+		mm128_t *c_anchors = collect_seed_hits_heap(nullptr, s->p->opt, s->p->opt->mid_occ, s->p->mi, s->seq[off].name, &mv, qlen_sum_old, &n_a, &rep_len, &n_mini_pos, &mini_pos);
+
+		// C++ style
+		int start_index = worker_data->context->input->fragment_index[i];
+		int end_index = worker_data->context->input->fragment_index[i + 1];
+		assert(end_index - start_index == s->n_seg[i]);
+		assert(qlen_sum == qlen_sum_old);
+
+		Seeder seeder(worker_data->context);
+		const auto &config = worker_data->context->config;
+		const auto &input = worker_data->context->input;
+		auto minimizers = seeder.collectMinimizers(i);
+		seeder.filters.minimizer_freq.filter(minimizers,
+											 config.seed_cfg.seed_occurrence_threshold,
+											 config.seed_cfg.query_occurrence_fraction);
+		// TEST Minimizers
+		assert(minimizers.size() == mv.n);
+		for (int j = 0; j < minimizers.size(); ++j)
+		{
+			assert(mv.a[j].x == minimizers[j].x);
+			assert(mv.a[j].y == minimizers[j].y);
+		}
+
+		auto [seeds, err_data] = seeder.collectMatches(i, minimizers);
+
+		// TEST Matches
+		for (int j = 0; j < seeds.queries.size(); ++j)
+		{
+			assert(seeds.queries[j].span == err_data.minimizer_positions[j].span());
+			assert(seeds.queries[j].query_pos == err_data.minimizer_positions[j].position());
+		}
+
+		auto [fragment_offset, _] = input->getOffset(i);
+		auto anchors = seeder.collectAnchorsHeap(seeds, input->segments.names[fragment_offset],
+											 input->fragment_lengths[i]);
+
+		// Utils::radixSortIterative(
+		// 	anchors.data(),
+		// 	anchors.data() + anchors.size(),
+		// 	[](const SharedMapTypes::Anchor &a)
+		// 	{
+		// 		return a.x; // keyExtractor — mimics minimap2’s radix key
+		// 	});
+		// TEST anchors
+		assert(n_a == anchors.size());
+		assert(seeds.repetitive_length == rep_len);
+		vector<pair<uint64_t, uint64_t>> anchor_vec;
+		for (int j = 0; j < anchors.size(); ++j)
+		{
+			anchor_vec.emplace_back(c_anchors[j].x, c_anchors[j].y);
+			if (j > 0)
+			{
+				assert(c_anchors[j].x >= c_anchors[j - 1].x);
+			}
+		}
+		vector<bool> founds(anchors.size(), false);
+		for (int j = 0; j < anchors.size(); ++j)
+		{
+			assert(anchor_vec[j].first == anchors[j].x);
+			// bool found = false;
+			// for(int k = 0; k < anchors.size(); ++k){
+			// 	if(anchors[j].x == anchor_vec[k].first && anchors[j].y == anchor_vec[k].second && !founds[k]){
+			// 		found = true;
+			// 		founds[k] = true;
+			// 		break;
+			// 	}
+			// }
+			// assert(found);
+		}
+		// assert(seeds.queries.size() == seeds.offsets.size() - 1 || (seeds.queries.empty() && seeds.offsets.empty()));
+
+		// for (int j = 0; j < seeds.queries.size(); ++j)
 		// {
-		// 	mm_sketch(nullptr, qseqs[j], qlens[j], s->p->mi->w, s->p->mi->k, j, s->p->mi->flag & MM_I_HPC, &mv);
-		// 	const string &sequence = worker_data->context->input->segments.sequences[start_index + j];
-		// 	assert(qseqs[j] == sequence);
-		// 	seeder.sketch(sequence, j, minimizer_output);
-		// 	int num_minimizers = minimizer_output.size();
-		// 	assert(num_minimizers == mv.n);
-		// 	for(int k = 0; k < num_minimizers; ++k){
-		// 		assert(mv.a[k].x == minimizer_output[k].x);
-		// 		assert(mv.a[k].y == minimizer_output[k].y);
-		// 	}
-		// 	for (int k = n; k < mv.n; ++k)
-		// 		mv.a[k].y += sum << 1;
-		// 	if (s->p->opt->sdust_thres > 0) // mask low-complexity minimizers
-		// 		mv.n = n + mm_dust_minier(nullptr, mv.n - n, mv.a + n, qlens[j], qseqs[j], s->p->opt->sdust_thres);
-		// 	sum += qlens[j], n = mv.n;
+		// 	assert((seeds.queries[j].query_pos << 1 | seeds.queries[j].strand) == m[j].q_pos);
+		// 	assert(seeds.queries[j].is_tandem == m[j].is_tandem);
+		// 	assert(seeds.queries[j].span == m[j].q_span);
+		// 	assert(seeds.queries[j].seg_id == m[j].seg_id);
+		// 	assert(seeds.queries[j].filter == m[j].flt);
+		// 	assert(seeds.minimizer_positions[j].data == mini_pos[j]);
 		// }
 
-		collect_minimizers(nullptr, s->p->opt, s->p->mi, s->n_seg[i], qlens, qseqs, &mv);
-		Seeder seeder(worker_data->context);
-		seeder.collect_minimizers(i);
-		const auto& minimizers = worker_data->context->output->intermediate_output.minimizers[i];
-		int num_minimizers = worker_data->context->output->intermediate_output.minimizers[i].size();
-		assert(num_minimizers == mv.n);
-		for(int i = 0; i < num_minimizers; ++i){
-			assert(mv.a[i].x == minimizers[i].x);
-			assert(mv.a[i].y == minimizers[i].y);
-		}
 		//////////////////////////
 		mm_map_frag(s->p->mi, s->n_seg[i], qlens, qseqs, &s->n_reg[off], &s->reg[off], b, s->p->opt, s->seq[off].name);
 		for (j = 0; j < s->n_seg[i]; ++j)
@@ -771,8 +831,13 @@ static void *worker_pipeline(void *shared, int step, void *in)
 		////////
 		// make input
 		worker_data->input = p->file_reader->readAllSegments(p->mini_batch_size);
-		////////
 		cout << "Done with modified: " << (std::chrono::high_resolution_clock::now() - start).count() << endl;
+		if (worker_data->input == nullptr)
+		{
+			free(s);
+			return 0;
+		}
+		////////
 		cout << worker_data->input->segments.sequences.size() << endl;
 		auto validateRes = [&]
 		{
@@ -795,7 +860,8 @@ static void *worker_pipeline(void *shared, int step, void *in)
 			}
 		};
 		validateRes();
-		// C++ implementation is about 20% slower than the C implementation in reading
+		// C++ implementation is about 25% faster than the C implementation in reading
+		// NOTE: this is only true when O3 and DNDEBUG flag
 		/////////
 		if (worker_data->input != nullptr)
 		{
@@ -806,18 +872,23 @@ static void *worker_pipeline(void *shared, int step, void *in)
 																	  // TODO: p->n_processed = total_segments; once below code is removed
 		}
 		// init map context
+
 		MapperConfig cfg = {
+			.flags = p->opt->flag,
 			.paired_end_orientation = bitset<2>(p->opt->pe_ori),
-			.independent_segments = static_cast<bool>(p->opt->flag & MM_F_INDEPEND_SEG),
-			.is_hpc = static_cast<bool>(p->opt->flag & MM_I_HPC),
-			.sdust_threshold = p->opt->sdust_thres,
-		};
+			.seed_cfg = MapperConfig::SeederConfig{
+				.query_occurrence_fraction = p->opt->q_occ_frac,
+				.seed_occurrence_threshold = p->opt->mid_occ,
+				.hard_seed_occurrence_threshold = p->opt->max_max_occ,
+				.seed_occurrence_distance = p->opt->occ_dist,
+				.sdust_threshold = p->opt->sdust_thres,
+			}};
 		worker_data->context = make_shared<MappingContext>(
 			cfg,
 			shared_ptr<mm_idx_t>(const_cast<mm_idx_t *>(p->mi), [](mm_idx_t *) {}),
 			worker_data->input,
 			worker_data->output);
-		
+
 		/////////
 		if (s->seq)
 		{

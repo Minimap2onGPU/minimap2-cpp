@@ -3,6 +3,13 @@
 #include <string>
 #include "../types.hpp"
 
+using SeedTypes::Minimizers;
+using SeedTypes::Seeds;
+
+// ============================================================================
+// ACTUAL FILTERS: These modify data in-place, removing unwanted elements
+// ============================================================================
+
 /**
  * DUST algorithm implementation for identifying low-complexity regions in DNA sequences.
  *
@@ -24,11 +31,11 @@ public:
      * @param start_index Starting index for filtering (minimizers before this are kept as-is)
      * @param minimizers Vector of minimizers to filter (modified in-place)
      */
-    void filter_minimizers(
+    void filter(
         const std::string &sequence,
         int threshold,
         int start_index,
-        std::vector<Minimizer> &minimizers) const;
+        Minimizers &minimizers) const;
 
 private:
     struct LowComplexityRegion
@@ -63,4 +70,48 @@ private:
     {
         int start, finish, score, length;
     };
+};
+
+/**
+ * Filter minimizers that occur too often
+ */
+class MinimizerFrequencyFilter
+{
+public:
+    void filter(Minimizers &minimizers, const int32_t max_occurrence, const float max_occurrence_fraction) const;
+};
+
+// ============================================================================
+// MARKERS: These only mark elements for filtering, don't remove them
+// ============================================================================
+
+/**
+ * Mark seeds that don't occur too often (sets filter=true flag, doesn't remove)
+ */
+class SeedFrequencyMarker
+{
+public:
+    void select(SeedTypes::Seeds &seeds, int total_query_length,
+                int soft_thres, int hard_thres, int dist) const;
+
+private:
+    struct CountToIndex
+    {
+        uint64_t data;
+        CountToIndex() = default;
+        CountToIndex(uint32_t count, uint32_t index)
+            : data((static_cast<uint64_t>(count) << 32) | index) {}
+
+        inline uint32_t count() const { return static_cast<uint32_t>(data >> 32); }
+        inline uint32_t index() const { return static_cast<uint32_t>(data); }
+
+        inline bool operator<(const CountToIndex &other) const { return data < other.data; }
+    };
+};
+
+struct Filters
+{
+    DustFilter dust;
+    MinimizerFrequencyFilter minimizer_freq;
+    SeedFrequencyMarker seed_freq;
 };

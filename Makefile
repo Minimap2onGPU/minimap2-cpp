@@ -1,6 +1,11 @@
-CXXFLAGS=	-g -Wall -O2 -Wextra -std=c++20
-CPPFLAGS=	-DHAVE_KALLOC
+# Default: Production build (no asserts, optimized)
+CXXFLAGS=	-Wall -O3 -Wextra -std=c++20
+CPPFLAGS=	-DHAVE_KALLOC -DNDEBUG
 INCLUDES=	-I. -Isrc
+
+# Debug build flags (with asserts, debug info)
+DEBUG_CXXFLAGS=	-g -Wall -O0 -Wextra -std=c++20
+DEBUG_CPPFLAGS=	-DHAVE_KALLOC
 
 # Find all .cpp files in src/ and subdirectories
 SRC_CPP_FILES := $(shell find src -name "*.cpp" -type f)
@@ -65,12 +70,26 @@ endif
 src/%.o: src/%.cpp
 		$(CXX) -c $(CXXFLAGS) $(CPPFLAGS) $(INCLUDES) $< -o $@
 
+# Default target (must be first)
 all:$(PROG)
+
+# Help target
+help:
+	@echo "Available targets:"
+	@echo "  make          - Production build (optimized, no asserts)"
+	@echo "  make debug    - Debug build (unoptimized, with asserts)"
+	@echo "  make clean    - Remove all object files and executables"
+	@echo "  make extra    - Build additional programs"
+	@echo ""
 
 extra:all $(PROG_EXTRA)
 
-debug: CXXFLAGS += -O0 -DDEBUG
-debug: clean minimap2
+# Debug build target (with asserts enabled, debug symbols)
+debug: CXXFLAGS = $(DEBUG_CXXFLAGS)
+debug: CPPFLAGS = $(DEBUG_CPPFLAGS)
+debug: clean $(PROG)
+
+.PHONY: debug
 
 # Debug target to show discovered files
 show-files:

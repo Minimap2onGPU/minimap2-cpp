@@ -2,16 +2,45 @@
 #include <memory>
 #include "types.hpp"
 #include <bitset>
+#include "../mmpriv.h"
 
+using IOTypes::InputDataFragments;
+using IOTypes::MappingOutputData;
 using std::bitset;
 using std::shared_ptr;
 
+// Flag bit positions
+enum class FlagBits : uint64_t
+{
+    INDEPENDENT_SEGMENTS = MM_F_INDEPEND_SEG,
+    HPC = MM_I_HPC,
+    NO_DIAGONAL_ANCHORS = MM_F_NO_DIAG,
+    NO_DUAL_MAPPING = MM_F_NO_DUAL,
+    FORWARD_ONLY = MM_F_FOR_ONLY,
+    REVERSE_ONLY = MM_F_REV_ONLY,
+    QUERY_STRAND_MODE = MM_F_QSTRAND,
+    USE_HEAP_SORT = MM_F_HEAP_SORT,
+    SEED_DEBUG_MODE = MM_DBG_PRINT_SEED,
+};
+
 struct MapperConfig
 {
-    bitset<2> paired_end_orientation; // bit 1 -> 1st read, bit 0 -> 2nd read
-    const bool independent_segments;
-    const bool is_hpc;
-    const int sdust_threshold; // DUST threshold for low-complexity filtering (0 = disabled)
+    const uint64_t flags;
+    const bitset<2> paired_end_orientation; // bit 1 -> 1st read, bit 0 -> 2nd read
+
+    inline bool isFlagSet(FlagBits bit) const
+    {
+        return (static_cast<uint64_t>(bit) & flags) != 0;
+    }
+
+    struct SeederConfig
+    {
+        const float query_occurrence_fraction;
+        const int32_t seed_occurrence_threshold;
+        const int32_t hard_seed_occurrence_threshold;
+        const int32_t seed_occurrence_distance;
+        const int sdust_threshold; // DUST threshold for low-complexity filtering (0 = disabled)
+    } seed_cfg;
 };
 
 struct MappingContext

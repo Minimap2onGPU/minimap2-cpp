@@ -4,6 +4,7 @@
 #include <sstream>
 #include <functional>
 
+using IOTypes::InputDataFragments;
 using std::cerr;
 using std::cout;
 using std::getline;
@@ -21,7 +22,9 @@ shared_ptr<InputDataFragments> FileReader::readAllSegments(size_t max_data_size)
         }
     }
     auto data = make_shared<InputDataFragments>();
-    data->fragment_index.push_back(0);
+    auto &fragment_index = data->fragment_index;
+    auto &fragment_lengths = data->fragment_lengths;
+    fragment_index.push_back(0);
     bool group_segments_by_name = config.fragment_mode && filestreams.size() == 1;
     size_t total_size = 0, fragment_size = 0;
     vector<InputSegment> inputs(filestreams.size());
@@ -39,7 +42,7 @@ shared_ptr<InputDataFragments> FileReader::readAllSegments(size_t max_data_size)
             {
                 fragment_size += buffer.sequence.size();
                 count++;
-                data->segments.consumeInput(buffer);
+                data->segments.consumeInput(std::move(buffer));
                 loadOneReadIntoBuffer(filestreams[0]);
             } while (buffer.valid && buffer.name == data->segments.names.back());
         }
@@ -67,19 +70,22 @@ shared_ptr<InputDataFragments> FileReader::readAllSegments(size_t max_data_size)
 
             for (auto &input : inputs)
             {
-                data->segments.consumeInput(input);
+                data->segments.consumeInput(std::move(input));
             }
         }
         assert(fragment_size != 0);
         assert(count != 0);
         total_size += fragment_size;
-        data->fragment_index.push_back(data->fragment_index.back() + count);
+        fragment_index.push_back(fragment_index.back() + count);
+        fragment_lengths.push_back(fragment_size);
         if (group_segments_by_name && !buffer.valid)
         {
             cout << "EOF reached before filling data\n";
+            assert(fragment_index.size() == fragment_lengths.size() + 1);
             return data;
         }
     }
+    assert(fragment_index.size() == fragment_lengths.size() + 1);
     return data;
 }
 

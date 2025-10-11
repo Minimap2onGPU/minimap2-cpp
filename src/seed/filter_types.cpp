@@ -1,13 +1,16 @@
-#include "dust_filter.hpp"
+#include "filter_types.hpp"
 #include <algorithm>
 #include <numeric>
 #include <deque>
+#include <unordered_map>
+#include "../utils.hpp"
+#include <queue>
 
-void DustFilter::filter_minimizers(
+void DustFilter::filter(
     const std::string &sequence,
     int threshold,
     int start_index,
-    std::vector<Minimizer> &minimizers) const
+    Minimizers &minimizers) const
 {
     if (threshold <= 0)
     {
@@ -239,4 +242,138 @@ int32_t DustFilter::LowComplexityRegion::start() const
 int32_t DustFilter::LowComplexityRegion::end() const
 {
     return static_cast<int32_t>(packed);
+}
+
+void MinimizerFrequencyFilter::filter(Minimizers &minimizers, const int32_t max_occurrence, const float max_occurrence_fraction) const
+{
+    if (minimizers.size() <= max_occurrence || max_occurrence_fraction < 0.0f || max_occurrence <= 0)
+    {
+        return;
+    }
+    std::unordered_map<uint64_t, uint64_t> freq;
+    for (const auto &minimizer : minimizers)
+    {
+        freq[minimizer.hash()]++;
+    }
+    // Filter out minimizers that exceed occurrence thresholds
+    size_t write_idx = 0;
+    size_t total_minimizers = minimizers.size();
+    static const auto max_tolerance = std::max(max_occurrence, static_cast<int32_t>(total_minimizers * max_occurrence_fraction));
+
+    for (size_t i = 0; i < total_minimizers; ++i)
+    {
+        if (freq[minimizers[i].hash()] <= max_tolerance)
+        {
+            minimizers[write_idx++] = minimizers[i];
+        }
+    }
+
+    minimizers.resize(write_idx);
+}
+
+void SeedFrequencyMarker::select(SeedTypes::Seeds &seeds, int total_query_length,
+                                 int soft_thres, int hard_thres, int dist) const
+{
+    static constexpr uint32_t MAX_ALLOWED_SEEDS_PER_QUERY = 128;
+    const uint32_t num_queries = static_cast<uint32_t>(seeds.queries.size());
+    const auto &ref_counts = seeds.ref_counts;
+    if (dist <= 0 || hard_thres <= soft_thres)
+    {
+        // Simple threshold filtering
+        for (size_t j = 0; j < num_queries; ++j)
+        {
+            if (ref_counts[j] > soft_thres)
+            {
+                seeds.queries[j].filter = true;
+            }
+        }
+        return;
+    }
+
+    if (num_queries <= 1)
+        return;
+
+    // Identify if a seed is high-frequency
+    auto isHighFreq = [&](uint32_t i)
+    { return static_cast<int>(ref_counts[i]) > soft_thres; };
+
+    // Check for any high-frequency seeds
+    bool has_high_freq = std::any_of(ref_counts.begin(), ref_counts.end(),
+                                     [soft_thres](int count)
+                                     { return count > soft_thres; });
+    if (!has_high_freq)
+        return;
+
+    // Heap buffer on stack (reused across streaks)
+    std::array<CountToIndex, MAX_ALLOWED_SEEDS_PER_QUERY> heap_storage;
+    uint32_t heap_size = 0;
+
+    uint32_t last_low = -1;
+
+    // Scan through all seeds and process contiguous high-frequency streaks
+    for (uint32_t i = 0; i <= num_queries; ++i)
+    {
+        if (i == num_queries || !isHighFreq(i))
+        {
+            // process streak if we just exited one
+            if (i - last_low > 1)
+            {
+                const uint32_t streak_start = last_low + 1;
+                const uint32_t streak_end = i;
+
+                // Compute position range
+                uint32_t pos_start = (streak_start == 0) ? 0 : seeds.queries[streak_start - 1].query_pos;
+                uint32_t pos_end = (streak_end >= num_queries) ? total_query_length : seeds.queries[streak_end].query_pos;
+
+                // Density-based cap on allowed seeds
+                uint32_t max_allowed = static_cast<uint32_t>(
+                    static_cast<double>(pos_end - pos_start) / dist + 0.499);
+                if (max_allowed <= 0)
+                {
+                    for (uint32_t j = streak_start; j < streak_end; ++j)
+                        seeds.queries[j].filter = 1;
+                    last_low = i;
+                    continue;
+                }
+
+                max_allowed = std::min(max_allowed, MAX_ALLOWED_SEEDS_PER_QUERY);
+
+                // Reset heap (max-heap of <ref_count, index>)
+                heap_size = 0;
+
+                // Maintain bounded heap of lowest-frequency seeds
+                for (uint32_t j = streak_start; j < streak_end; ++j)
+                {
+                    uint32_t count = ref_counts[j];
+
+                    // Hard cutoff: ignore extremely frequent seeds
+                    if (count > static_cast<uint32_t>(hard_thres))
+                    {
+                        continue;
+                    }
+
+                    if (heap_size < max_allowed)
+                    {
+                        heap_storage[heap_size++] = {count, j};
+                        std::push_heap(heap_storage.begin(), heap_storage.begin() + heap_size);
+                    }
+                    else if (count < heap_storage[0].count())
+                    {
+                        std::pop_heap(heap_storage.begin(), heap_storage.begin() + heap_size);
+                        heap_storage[heap_size - 1] = {count, j};
+                        std::push_heap(heap_storage.begin(), heap_storage.begin() + heap_size);
+                    }
+                }
+
+                // Mark all seeds as filtered by default
+                for (uint32_t j = streak_start; j < streak_end; ++j)
+                    seeds.queries[j].filter = 1;
+
+                // Mark selected (lowest-frequency) seeds as kept
+                for (uint32_t k = 0; k < heap_size; ++k)
+                    seeds.queries[heap_storage[k].index()].filter = 0;
+            }
+            last_low = i; // update boundary of last low-freq seed
+        }
+    }
 }

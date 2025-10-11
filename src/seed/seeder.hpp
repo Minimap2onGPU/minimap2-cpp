@@ -1,9 +1,15 @@
 #pragma once
 #include "mapper.hpp"
-#include "dust_filter.hpp"
+#include "filter_types.hpp"
+#include "../types.hpp"
 #include <cassert>
 #include <vector>
 
+using SeedTypes::Minimizer;
+using SeedTypes::Minimizers;
+using SeedTypes::Seeds;
+using SharedMapTypes::Anchors;
+using SharedMapTypes::ErrEstimationData;
 using std::vector;
 
 class Seeder : public MappingVisitor
@@ -13,11 +19,39 @@ public:
     void visit() override;
 
     // TODO: make private once tested
-    void collect_minimizers(int fragment_index);
-    // EFFECT: Find symmetric (w,k)-minimizers on a DNA sequence
-    void sketch(const string &sequence, uint32_t readID, vector<Minimizer> &out);
+    // find potential minimizers for this fragment
+    Minimizers collectMinimizers(int fragment);
+
+    // find potential seeds for this fragment
+    std::pair<Seeds, ErrEstimationData> collectMatches(int fragment, const Minimizers &minimizers);
+
+    // Convert seeds to anchors, applying filtering and strand logic
+    Anchors collectAnchors(const Seeds &seeds, const string &query_name, int total_query_len) const;
+
+    Anchors collectAnchorsHeap(const Seeds &seeds, const string &query_name, int total_query_len) const;
+
+    enum class SeedDecision
+    {
+        ACCEPT,
+        ACCEPT_AS_SELF,
+        SKIP,
+    };
+
+    SeedDecision decide(const Seeds::SeedHitRef ref_position, const Seeds::SeedHitQuery &query,
+                        const string &query_name, const int total_query_len) const;
+
+    void debugPrint(const Seeds& seeds, const Anchors& anchors);
+
+    Filters filters;
 
 private:
+    // EFFECT: Find symmetric (w,k)-minimizers on a DNA sequence
+    void sketch(const string &sequence, uint32_t readID, Minimizers &out);
+
+    void populateSeeds(const Minimizers &minimizers, Seeds &seeds);
+
+    void processedSelectedSeeds(Seeds &seeds, ErrEstimationData &err_data);
+
     // fast queue used for sketch
     struct TinyQueue
     {
@@ -25,20 +59,39 @@ private:
         int front, count;
         int data[Q_SIZE];
 
-        TinyQueue();
+        constexpr TinyQueue() : front(0), count(0) {};
 
-        void push(int x);
+        constexpr void push(int x)
+        {
+            assert(count < Q_SIZE);
+            data[(front + count++) % Q_SIZE] = x;
+        }
 
-        int shift();
+        constexpr int shift()
+        {
+            if (count == 0)
+                return -1;
+            int x = data[front++];
+            front = front % Q_SIZE;
+            --count;
+            return x;
+        }
 
-        void reset();
+        constexpr void reset()
+        {
+            front = count = 0;
+        }
     };
 
-    static uint64_t hash64(uint64_t key, uint64_t mask);
-
-
-
-    void seedFragment(int fragment_index);
-
-    DustFilter dust_filter; // DUST algorithm implementation
+    constexpr uint64_t hash64(uint64_t key, uint64_t mask)
+    {
+        key = (~key + (key << 21)) & mask; // key = (key << 21) - key - 1;
+        key = key ^ key >> 24;
+        key = ((key + (key << 3)) + (key << 8)) & mask; // key * 265
+        key = key ^ key >> 14;
+        key = ((key + (key << 2)) + (key << 4)) & mask; // key * 21
+        key = key ^ key >> 28;
+        key = (key + (key << 31)) & mask;
+        return key;
+    }
 };
