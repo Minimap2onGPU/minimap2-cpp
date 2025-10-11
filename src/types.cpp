@@ -58,10 +58,7 @@ namespace IOTypes
 
     void MappingOutputData::IntermediateOutput::resize(const size_t size)
     {
-        minimizers.resize(size);
-        seeds.resize(size);
         anchors.resize(size);
         err_data.resize(size);
-        chain_scores.resize(size);
     }
 }

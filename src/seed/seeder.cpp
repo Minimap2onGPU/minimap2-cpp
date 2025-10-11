@@ -20,7 +20,7 @@ void Seeder::visit()
         filters.minimizer_freq.filter(minimizers,
                                       config.seed_cfg.seed_occurrence_threshold,
                                       config.seed_cfg.query_occurrence_fraction);
-        auto [seeds, err_data] = collectMatches(i, minimizers);
+        auto [seeds, err_data] = collectMatches(minimizers, input->fragment_lengths[i]);
 
         auto [fragment_offset, _] = input->getOffset(i);
 
@@ -36,7 +36,7 @@ void Seeder::visit()
 
 Seeder::Seeder(shared_ptr<MappingContext> ctx) : MappingVisitor(ctx), filters() {};
 
-Minimizers Seeder::collectMinimizers(int fragment)
+Minimizers Seeder::collectMinimizers(const int fragment) const
 {
     assert(fragment >= 0 && fragment + 1 < context->input->fragment_index.size());
     int start_index = context->input->fragment_index[fragment];
@@ -54,7 +54,7 @@ Minimizers Seeder::collectMinimizers(int fragment)
         size_t initial_size = output.size();
 
         // Generate minimizers for this segment
-        sketch(sequence, i - start_index, output);
+        sketch(output, sequence, i - start_index);
 
         // Adjust positions to be relative to concatenated sequence
         for (size_t j = initial_size; j < output.size(); ++j)
@@ -73,7 +73,7 @@ Minimizers Seeder::collectMinimizers(int fragment)
     return output;
 }
 
-void Seeder::sketch(const std::string &sequence, uint32_t readID, Minimizers &out)
+void Seeder::sketch(Minimizers &out, const std::string &sequence, const uint32_t readID) const
 {
     const int seq_len = sequence.size();
     const int window_size = context->mm2_index->w;
@@ -214,17 +214,17 @@ void Seeder::sketch(const std::string &sequence, uint32_t readID, Minimizers &ou
         out.push_back(min);
 }
 
-std::pair<Seeds, ErrEstimationData> Seeder::collectMatches(int fragment, const Minimizers &minimizers)
+std::pair<Seeds, ErrEstimationData> Seeder::collectMatches(const Minimizers &minimizers, const int total_query_len) const
 {
     Seeds seeds;
     ErrEstimationData err_data;
     seeds.refs.reserve(minimizers.size() * Seeds::AVG_SEEDS_PER_MINIMIZER);
     seeds.queries.reserve(minimizers.size());
     err_data.minimizer_positions.reserve(minimizers.size());
-    populateSeeds(minimizers, seeds);
+    populateSeeds(seeds, minimizers);
     if (!seeds.queries.empty())
     {
-        filters.seed_freq.select(seeds, context->input->fragment_lengths[fragment],
+        filters.seed_freq.select(seeds, total_query_len,
                                  context->config.seed_cfg.seed_occurrence_threshold,
                                  context->config.seed_cfg.hard_seed_occurrence_threshold,
                                  context->config.seed_cfg.seed_occurrence_distance);
@@ -233,7 +233,7 @@ std::pair<Seeds, ErrEstimationData> Seeder::collectMatches(int fragment, const M
     return {seeds, err_data};
 }
 
-void Seeder::populateSeeds(const Minimizers &minimizers, Seeds &seeds)
+void Seeder::populateSeeds(Seeds &seeds, const Minimizers &minimizers) const
 {
     size_t size = minimizers.size();
     for (size_t i = 0; i < size; ++i)
@@ -268,7 +268,7 @@ void Seeder::populateSeeds(const Minimizers &minimizers, Seeds &seeds)
     assert(seeds.refs.size() == seeds.ref_counts.size());
 }
 
-void Seeder::processedSelectedSeeds(Seeds &seeds, ErrEstimationData &err_data)
+void Seeder::processedSelectedSeeds(Seeds &seeds, ErrEstimationData &err_data) const
 {
     int rep_start = 0, rep_end = 0;
     int repetitive_length = 0;
@@ -358,7 +358,7 @@ Seeder::SeedDecision Seeder::decide(const Seeds::SeedHitRef ref_position, const 
     return is_self ? SeedDecision::ACCEPT_AS_SELF : SeedDecision::ACCEPT;
 }
 
-Anchors Seeder::collectAnchors(const Seeds &seeds, const string &query_name, int total_query_len) const
+Anchors Seeder::collectAnchors(const Seeds &seeds, const string &query_name, const int total_query_len) const
 {
     Anchors anchors;
 
@@ -426,7 +426,7 @@ Anchors Seeder::collectAnchors(const Seeds &seeds, const string &query_name, int
     return anchors;
 }
 
-Anchors Seeder::collectAnchorsHeap(const Seeds &seeds, const std::string &query_name, int total_query_len) const
+Anchors Seeder::collectAnchorsHeap(const Seeds &seeds, const std::string &query_name, const int total_query_len) const
 {
     struct HeapItem
     {
@@ -526,7 +526,7 @@ Anchors Seeder::collectAnchorsHeap(const Seeds &seeds, const std::string &query_
     return anchors;
 }
 
-void Seeder::debugPrint(const Seeds &seeds, const Anchors &anchors)
+void Seeder::debugPrint(const Seeds &seeds, const Anchors &anchors) const
 {
 
     std::cerr << "RS\t" << seeds.repetitive_length << std::endl;

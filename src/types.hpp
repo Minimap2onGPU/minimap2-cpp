@@ -214,8 +214,8 @@ namespace IOTypes
     struct InputDataFragments
     {
         InputSegments segments;
-        vector<int> fragment_index; // index into <segments>
-        vector<int> fragment_lengths;
+        vector<int> fragment_index;   // index into <segments>
+        vector<int> fragment_lengths; // total length per fragment
         pair<int, int> getOffset(int fragment);
         int getNumsegmentsInFragment(int fragment);
         int getNumFragments();
@@ -239,14 +239,13 @@ namespace IOTypes
         // holds information across seed, chain, align
         struct IntermediateOutput
         {
-            // seeding output - per segment if INDEPENDENT_SEG flag set, otherwise per fragment
-            vector<SeedTypes::Minimizers> minimizers;
-            vector<SeedTypes::Seeds> seeds;
+            // # vec elems is 1 per segment if INDEPENDENT_SEG flag set, otherwise 1 per fragment
+            // vector<SeedTypes::Minimizers> minimizers;
+            // vector<SeedTypes::Seeds> seeds;
             vector<SharedMapTypes::ErrEstimationData> err_data;
-            vector<SharedMapTypes::Anchors> anchors;
 
-            // chaining output
-            vector<vector<uint64_t>> chain_scores;
+            // output from seed & reused in chain
+            vector<SharedMapTypes::Anchors> anchors;
 
             void resize(const size_t size);
         } intermediate_output;
