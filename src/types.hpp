@@ -16,7 +16,7 @@ namespace SeedTypes
     template <typename Derived>
     struct PositionAccessors
     {
-        // bit represntations: readID (32 - 63) | lastPos (1 - 31) | strand, 0 = forward, 1 = backward, (0)
+        // bit represntations: readID (32 - 63) | lastPos (1 - 31) | strand, 0 = forward, 1 = backward
         constexpr uint32_t rid() const
         {
             static_assert(std::same_as<decltype(static_cast<const Derived *>(this)->get_data()), uint64_t>,
@@ -73,16 +73,13 @@ namespace SeedTypes
 
     struct MinimizerPosition
     {
-        uint64_t data; // Upper 32 bits: span, Lower 32 bits: position
+        uint32_t span;
+        uint32_t position;
 
-        constexpr MinimizerPosition() : data(0) {}
+        constexpr MinimizerPosition() : span(0), position(0) {}
 
-        constexpr MinimizerPosition(uint32_t span, uint32_t position)
-            : data((static_cast<uint64_t>(span) << 32) | position) {}
-
-        // Accessors
-        constexpr uint32_t span() const { return static_cast<uint32_t>(data >> 32); }
-        constexpr uint32_t position() const { return static_cast<uint32_t>(data); }
+        constexpr MinimizerPosition(uint32_t span_in, uint32_t position_in)
+            : span(span_in), position(position_in) {}
     };
 
     using Minimizers = vector<Minimizer>;
@@ -101,9 +98,53 @@ namespace SeedTypes
         // SeedHitQuery represents a query minimizer
         struct SeedHitQuery
         {
-            uint32_t query_pos : 31, strand : 1;
-            uint32_t span : 31, filter : 1;
-            uint32_t seg_id : 31, is_tandem : 1;
+            uint16_t span_and_flags;
+            uint32_t query_pos;
+            uint32_t seg_id;
+
+            SeedHitQuery() : span_and_flags(0), query_pos(0), seg_id(0) {};
+
+            SeedHitQuery(uint32_t query_pos_in, uint32_t seg_id_in, uint8_t span,
+                         bool strand, bool filter, bool tandem) : span_and_flags(pack_span_and_flags(span, strand, filter, tandem)),
+                                                                  query_pos(query_pos_in), seg_id(seg_id_in) {};
+
+            // Bit positions in span_and_flags
+            static constexpr uint16_t STRAND_MASK = 1;
+            static constexpr uint16_t FILTER_MASK = 1 << 1;
+            static constexpr uint16_t IS_TANDEM_MASK = 1 << 2;
+
+            static constexpr uint16_t pack_span_and_flags(uint8_t span, bool strand, bool filter, bool tandem)
+            {
+                return (static_cast<uint16_t>(span) << 3) | (tandem << 2) | (filter << 1) | strand;
+            }
+
+            constexpr uint8_t span() const { return static_cast<uint8_t>(span_and_flags >> 3); }
+            constexpr bool strand() const { return (span_and_flags & STRAND_MASK) != 0; }
+            constexpr bool filter() const { return (span_and_flags & FILTER_MASK) != 0; }
+            constexpr bool isTandem() const { return (span_and_flags & IS_TANDEM_MASK) != 0; }
+
+            constexpr void setSpan(uint8_t s) { span_and_flags = (span_and_flags & 0x7) | (static_cast<uint16_t>(s) << 3); }
+            constexpr void setStrand(bool v)
+            {
+                if (v)
+                    span_and_flags |= STRAND_MASK;
+                else
+                    span_and_flags &= ~STRAND_MASK;
+            }
+            constexpr void setFilter(bool v)
+            {
+                if (v)
+                    span_and_flags |= FILTER_MASK;
+                else
+                    span_and_flags &= ~FILTER_MASK;
+            }
+            constexpr void setTandem(bool v)
+            {
+                if (v)
+                    span_and_flags |= IS_TANDEM_MASK;
+                else
+                    span_and_flags &= ~IS_TANDEM_MASK;
+            }
         };
 
         vector<observer_ptr<SeedHitRef>> refs;
@@ -163,7 +204,7 @@ namespace SharedMapTypes
 
         constexpr uint32_t queryPos() const { return static_cast<uint32_t>(y); }
         constexpr uint8_t span() const { return static_cast<uint8_t>(y >> 32); }
-        constexpr uint8_t seg_id() const { return static_cast<uint8_t>(y >> MM_SEED_SEG_SHIFT); }
+        constexpr uint8_t segId() const { return static_cast<uint8_t>(y >> MM_SEED_SEG_SHIFT); }
         constexpr bool isTandem() const { return (y & MM_SEED_TANDEM) != 0; }
         constexpr bool isSelf() const { return (y & MM_SEED_SELF) != 0; }
 
@@ -178,6 +219,29 @@ namespace SharedMapTypes
     struct ErrEstimationData
     {
         vector<SeedTypes::MinimizerPosition> minimizer_positions; // equivalent to mini_pos in C vers.
+    };
+
+    struct ChainMetadata
+    {
+        int32_t score;
+        uint32_t anchor_count;
+        uint32_t ref_start;
+        uint32_t ref_end;
+
+        static constexpr uint32_t radixSortKey(const ChainMetadata &c)
+        {
+            assert(c.score >= 0 && "Score must be non-negative for radix sort");
+            return c.score;
+        }
+    };
+
+    struct Chains
+    {
+        Anchors anchors;
+        vector<int32_t> scores;
+        vector<uint32_t> anchor_counts;
+        vector<uint32_t> ref_start;
+        vector<uint32_t> ref_end;
     };
 }
 

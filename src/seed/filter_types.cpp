@@ -284,7 +284,7 @@ void SeedFrequencyMarker::select(SeedTypes::Seeds &seeds, int total_query_length
         {
             if (ref_counts[j] > soft_thres)
             {
-                seeds.queries[j].filter = true;
+                seeds.queries[j].setFilter(true);
             }
         }
         return;
@@ -331,7 +331,7 @@ void SeedFrequencyMarker::select(SeedTypes::Seeds &seeds, int total_query_length
                 if (max_allowed <= 0)
                 {
                     for (uint32_t j = streak_start; j < streak_end; ++j)
-                        seeds.queries[j].filter = 1;
+                        seeds.queries[j].setFilter(true);
                     last_low = i;
                     continue;
                 }
@@ -367,11 +367,11 @@ void SeedFrequencyMarker::select(SeedTypes::Seeds &seeds, int total_query_length
 
                 // Mark all seeds as filtered by default
                 for (uint32_t j = streak_start; j < streak_end; ++j)
-                    seeds.queries[j].filter = 1;
+                    seeds.queries[j].setFilter(true);
 
                 // Mark selected (lowest-frequency) seeds as kept
                 for (uint32_t k = 0; k < heap_size; ++k)
-                    seeds.queries[heap_storage[k].index()].filter = 0;
+                    seeds.queries[heap_storage[k].index()].setFilter(false);
             }
             last_low = i; // update boundary of last low-freq seed
         }

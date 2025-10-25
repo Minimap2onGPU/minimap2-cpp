@@ -14,43 +14,60 @@ void Seeder::visit()
 {
     const auto &config = context->config;
     const auto &input = context->input;
-    for (int i = 0; i < context->input->getNumFragments(); ++i)
+
+    auto seedRange = [&](const int start, const int end, const int total_query_len)
     {
-        auto minimizers = collectMinimizers(i);
+        auto minimizers = collectMinimizers(start, end, total_query_len);
         filters.minimizer_freq.filter(minimizers,
                                       config.seed_cfg.seed_occurrence_threshold,
                                       config.seed_cfg.query_occurrence_fraction);
-        auto [seeds, err_data] = collectMatches(minimizers, input->fragment_lengths[i]);
-
-        auto [fragment_offset, _] = input->getOffset(i);
+        auto [seeds, err_data] = collectMatches(minimizers, total_query_len);
 
         auto anchors = config.isFlagSet(FlagBits::USE_HEAP_SORT)
-                           ? collectAnchorsHeap(seeds, input->segments.names[fragment_offset], input->fragment_lengths[i])
-                           : collectAnchors(seeds, input->segments.names[fragment_offset], input->fragment_lengths[i]);
+                           ? collectAnchorsHeap(seeds, input->segments.names[start], total_query_len)
+                           : collectAnchors(seeds, input->segments.names[start], total_query_len);
         if (config.isFlagSet(FlagBits::SEED_DEBUG_MODE))
         {
             debugPrint(seeds, anchors);
+        }
+    };
+
+    if (config.isFlagSet(FlagBits::INDEPENDENT_SEGMENTS))
+    {
+        // seed each segment independently
+        const auto &sequences = input->segments.sequences;
+        for (int i = 0; i < sequences.size(); ++i)
+        {
+            seedRange(i, i + 1, sequences[i].size());
+        }
+    }
+    else
+    {
+        // seed each segment within its fragment
+        for (int i = 0; i < input->getNumFragments(); ++i)
+        {
+            const auto [start, end] = input->getOffset(i);
+            const auto total_query_len = input->fragment_lengths[i];
+            seedRange(start, end, total_query_len);
         }
     }
 }
 
 Seeder::Seeder(shared_ptr<MappingContext> ctx) : MappingVisitor(ctx), filters() {};
 
-Minimizers Seeder::collectMinimizers(const int fragment) const
+Minimizers Seeder::collectMinimizers(const int start_index, const int end_index, const int total_query_len) const
 {
-    assert(fragment >= 0 && fragment + 1 < context->input->fragment_index.size());
-    int start_index = context->input->fragment_index[fragment];
-    int end_index = context->input->fragment_index[fragment + 1];
-    assert(start_index < end_index);
+    const auto &sequence_vec = context->input->segments.sequences;
+    assert(0 <= start_index && start_index < end_index && end_index <= sequence_vec.size());
+
     int sum = 0;
     Minimizers output;
-    int total_fragment_length = context->input->fragment_lengths[fragment];
     // Estimate minimizers based on total length
-    size_t expected_minimizers = std::max(1, (total_fragment_length - context->mm2_index->k + 1) / context->mm2_index->w);
+    size_t expected_minimizers = std::max(1, (total_query_len - context->mm2_index->k + 1) / context->mm2_index->w);
     output.reserve(expected_minimizers);
     for (int i = start_index; i < end_index; ++i)
     {
-        const string &sequence = context->input->segments.sequences[i];
+        const string &sequence = sequence_vec[i];
         size_t initial_size = output.size();
 
         // Generate minimizers for this segment
@@ -255,14 +272,8 @@ void Seeder::populateSeeds(Seeds &seeds, const Minimizers &minimizers) const
         bool is_tandem = (i > 0 && minimizers[i - 1].hash() == minimizer_hash) ||
                          (i < minimizers.size() - 1 && minimizers[i + 1].hash() == minimizer_hash);
         seeds.ref_counts.push_back(num_hits);
-        seeds.queries.push_back(Seeds::SeedHitQuery{
-            .query_pos = minimizer.pos(),
-            .strand = minimizer.strand(),
-            .span = minimizer.span(),
-            .filter = false,
-            .seg_id = minimizer.rid(),
-            .is_tandem = is_tandem,
-        });
+        seeds.queries.emplace_back(minimizer.pos(), minimizer.rid(), minimizer.span(),
+                                   minimizer.strand(), false, is_tandem);
     }
     assert(seeds.queries.size() == seeds.ref_counts.size());
     assert(seeds.refs.size() == seeds.ref_counts.size());
@@ -281,10 +292,10 @@ void Seeder::processedSelectedSeeds(Seeds &seeds, ErrEstimationData &err_data) c
     {
         const auto &query = seeds.queries[read_index];
 
-        if (query.filter) // Filtered seed - contribute to repetitive length calculation
+        if (query.filter()) // Filtered seed - contribute to repetitive length calculation
         {
             int seed_end = query.query_pos + 1;
-            int seed_start = seed_end - query.span;
+            int seed_start = seed_end - query.span();
 
             if (seed_start > rep_end)
             {
@@ -305,7 +316,7 @@ void Seeder::processedSelectedSeeds(Seeds &seeds, ErrEstimationData &err_data) c
             total_hits += seeds.ref_counts[read_index];
 
             // Add minimizer position for error estimation
-            err_data.minimizer_positions.emplace_back(query.span, query.query_pos);
+            err_data.minimizer_positions.emplace_back(query.span(), query.query_pos);
 
             seeds.queries[write_index] = seeds.queries[read_index];
             seeds.ref_counts[write_index] = seeds.ref_counts[read_index];
@@ -336,7 +347,7 @@ Seeder::SeedDecision Seeder::decide(const Seeds::SeedHitRef ref_position, const 
             if (ref_position.pos() == query.query_pos)
                 return SeedDecision::SKIP; // avoid the diagonal anchors
 
-            if (ref_position.strand() == query.strand)
+            if (ref_position.strand() == query.strand())
                 is_self = true; // this flag is used to avoid spurious extension on self chain
         }
 
@@ -344,7 +355,7 @@ Seeder::SeedDecision Seeder::decide(const Seeds::SeedHitRef ref_position, const 
             return SeedDecision::SKIP; // all-vs-all mode: map once
     }
 
-    if (ref_position.strand() == query.strand)
+    if (ref_position.strand() == query.strand())
     { // forward strand alignment
         if (context->config.isFlagSet(FlagBits::REVERSE_ONLY))
             return SeedDecision::SKIP;
@@ -370,7 +381,7 @@ Anchors Seeder::collectAnchors(const Seeds &seeds, const string &query_name, con
         const auto &query = seeds.queries[i];
 
         // Skip filtered seeds
-        if (query.filter)
+        if (query.filter())
             continue;
 
         observer_ptr<SeedTypes::Seeds::SeedHitRef> ref_hits = seeds.refs[i];
@@ -385,7 +396,7 @@ Anchors Seeder::collectAnchors(const Seeds &seeds, const string &query_name, con
             if (decision == SeedDecision::SKIP)
                 continue;
 
-            bool reverse_strand = (ref_position.strand() != query.strand);
+            bool reverse_strand = (ref_position.strand() != query.strand());
 
             uint32_t final_query_pos;
             uint32_t final_ref_pos = ref_position.pos();
@@ -398,13 +409,13 @@ Anchors Seeder::collectAnchors(const Seeds &seeds, const string &query_name, con
             else if (!(context->config.isFlagSet(FlagBits::QUERY_STRAND_MODE)))
             {
                 // Reverse strand and not in query-strand mode
-                final_query_pos = total_query_len - (query.query_pos + 1 - query.span) - 1;
+                final_query_pos = total_query_len - (query.query_pos + 1 - query.span()) - 1;
             }
             else
             {
                 // Reverse strand in query-strand mode
                 int32_t ref_len = context->mm2_index->seq[ref_position.rid()].len;
-                final_ref_pos = ref_len - (ref_position.pos() + 1 - query.span) - 1;
+                final_ref_pos = ref_len - (ref_position.pos() + 1 - query.span()) - 1;
                 final_query_pos = query.query_pos;
             }
 
@@ -414,9 +425,9 @@ Anchors Seeder::collectAnchors(const Seeds &seeds, const string &query_name, con
                 final_ref_pos,                           // reference position
                 reverse_strand,                          // strand orientation
                 final_query_pos,                         // query position
-                query.span,                              // k-mer span
+                query.span(),                            // k-mer span
                 query.seg_id,                            // segment ID
-                query.is_tandem,                         // tandem repeat flag
+                query.isTandem(),                        // tandem repeat flag
                 decision == SeedDecision::ACCEPT_AS_SELF // self-alignment flag
             );
         }
@@ -453,7 +464,7 @@ Anchors Seeder::collectAnchorsHeap(const Seeds &seeds, const std::string &query_
     for (size_t i = 0; i < seeds.queries.size(); ++i)
     {
         const auto &query = seeds.queries[i];
-        if (query.filter)
+        if (query.filter())
             continue;
 
         auto ref_hits = seeds.refs[i];
@@ -476,27 +487,27 @@ Anchors Seeder::collectAnchorsHeap(const Seeds &seeds, const std::string &query_
         SeedDecision decision = decide(ref_pos, query, query_name, total_query_len);
         if (decision != SeedDecision::SKIP)
         {
-            bool is_reverse = (ref_pos.strand() != query.strand);
+            bool is_reverse = (ref_pos.strand() != query.strand());
             uint32_t query_position = query.query_pos;
             uint32_t ref_position = ref_pos.pos();
 
             if (is_reverse && context->config.isFlagSet(FlagBits::QUERY_STRAND_MODE))
             {
                 int32_t ref_len = context->mm2_index->seq[ref_pos.rid()].len;
-                ref_position = ref_len - (ref_pos.pos() + 1 - query.span) - 1;
+                ref_position = ref_len - (ref_pos.pos() + 1 - query.span()) - 1;
             }
             else if (is_reverse)
             {
-                query_position = total_query_len - (query.query_pos + 1 - query.span) - 1;
+                query_position = total_query_len - (query.query_pos + 1 - query.span()) - 1;
             }
 
             SharedMapTypes::Anchor anchor(ref_pos.rid(),
                                           ref_position,
                                           is_reverse,
                                           query_position,
-                                          query.span,
+                                          query.span(),
                                           query.seg_id,
-                                          query.is_tandem,
+                                          query.isTandem(),
                                           decision == SeedDecision::ACCEPT_AS_SELF);
 
             if (!is_reverse)

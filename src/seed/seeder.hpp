@@ -19,8 +19,8 @@ public:
     void visit() override final;
 
     // TODO: make private once tested
-    // find potential minimizers for this fragment
-    Minimizers collectMinimizers(const int fragment) const;
+    // collect minimizers from input fragment
+    Minimizers collectMinimizers(const int start_index, const int end_index, const int total_query_len) const;
 
     // find potential seeds for this fragment
     std::pair<Seeds, ErrEstimationData> collectMatches(const Minimizers &minimizers, const int total_query_len) const;
