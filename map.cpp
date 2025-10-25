@@ -17,6 +17,7 @@
 #include "src/types.hpp"
 #include "src/mapper.hpp"
 #include "src/seed/seeder.hpp"
+#include "src/chain/chainer.hpp"
 #include "src/utils.hpp"
 #include <unordered_map>
 
@@ -601,8 +602,10 @@ static void worker_for(void *_data, long i, int tid) // kt_for() callback
 
 		// C style
 		mm128_v mv = {0, 0, 0};
-		collect_minimizers(nullptr, s->p->opt, s->p->mi, s->n_seg[i], qlens, qseqs, &mv);
-		mm_seed_mz_flt(nullptr, &mv, s->p->opt->mid_occ, s->p->opt->q_occ_frac);
+		auto opt = s->p->opt;
+		auto mi = s->p->mi;
+		collect_minimizers(nullptr, opt, mi, s->n_seg[i], qlens, qseqs, &mv);
+		mm_seed_mz_flt(nullptr, &mv, opt->mid_occ, opt->q_occ_frac);
 		int qlen_sum_old = 0, qlen_sum = worker_data->context->input->fragment_lengths[i];
 		for (int j = 0; j < s->n_seg[i]; ++j)
 		{
@@ -612,86 +615,159 @@ static void worker_for(void *_data, long i, int tid) // kt_for() callback
 		int rep_len, n_mini_pos;
 		uint64_t *mini_pos;
 		mm_seed_t *m;
-		mm128_t *c_anchors = collect_seed_hits_heap(nullptr, s->p->opt, s->p->opt->mid_occ, s->p->mi, s->seq[off].name, &mv, qlen_sum_old, &n_a, &rep_len, &n_mini_pos, &mini_pos);
+		mm128_t *c_anchors = collect_seed_hits_heap(nullptr, opt, opt->mid_occ, mi, s->seq[off].name, &mv, qlen_sum_old, &n_a, &rep_len, &n_mini_pos, &mini_pos);
 
+		// chain
+		// set max chaining gap on the query and the reference sequence
+		// Add these variable declarations before the chaining code
+		int n_regs0, n_segs;
+		uint64_t *u;
+		mm128_t *a;
+		float chn_pen_gap, chn_pen_skip;
+		int max_chain_gap_qry, max_chain_gap_ref_old;
+		bool is_splice, is_sr;
+
+		if (is_sr)
+			max_chain_gap_qry = qlen_sum > opt->max_gap ? qlen_sum : opt->max_gap;
+		else
+			max_chain_gap_qry = opt->max_gap;
+
+		if (opt->max_gap_ref > 0)
+		{
+			max_chain_gap_ref_old = opt->max_gap_ref; // always honor mm_mapopt_t::max_gap_ref if set
+		}
+		else if (opt->max_frag_len > 0)
+		{
+			max_chain_gap_ref_old = opt->max_frag_len - qlen_sum;
+			if (max_chain_gap_ref_old < opt->max_gap)
+				max_chain_gap_ref_old = opt->max_gap;
+		}
+		else
+			max_chain_gap_ref_old = opt->max_gap;
+
+		chn_pen_gap = opt->chain_gap_scale * 0.01 * mi->k;
+		chn_pen_skip = opt->chain_skip_scale * 0.01 * mi->k;
+
+		// if (opt->flag & MM_F_RMQ)
+		// {
+		// 	a = mg_lchain_rmq(opt->max_gap, opt->rmq_inner_dist, opt->bw, opt->max_chain_skip,
+		// 					  opt->rmq_size_cap, opt->min_cnt, opt->min_chain_score,
+		// 					  chn_pen_gap, chn_pen_skip, n_a, a, &n_regs0, &u, nullptr);
+		// }
+		// else
+		// {
+		// 	a = mg_lchain_dp(max_chain_gap_ref_old, max_chain_gap_qry, opt->bw, opt->max_chain_skip,
+		// 					 opt->max_chain_iter, opt->min_cnt, opt->min_chain_score,
+		// 					 chn_pen_gap, chn_pen_skip, is_splice, n_segs, n_a, a, &n_regs0, &u, nullptr);
+		// }
+
+		////////////////////////////////////////
 		// C++ style
-		int start_index = worker_data->context->input->fragment_index[i];
-		int end_index = worker_data->context->input->fragment_index[i + 1];
-		assert(end_index - start_index == s->n_seg[i]);
-		assert(qlen_sum == qlen_sum_old);
-
-		Seeder seeder(worker_data->context);
+		auto context = worker_data->context;
 		const auto &config = worker_data->context->config;
 		const auto &input = worker_data->context->input;
-		auto minimizers = seeder.collectMinimizers(i);
-		seeder.filters.minimizer_freq.filter(minimizers,
-											 config.seed_cfg.seed_occurrence_threshold,
-											 config.seed_cfg.query_occurrence_fraction);
-		// TEST Minimizers
-		assert(minimizers.size() == mv.n);
-		for (int j = 0; j < minimizers.size(); ++j)
+		Seeder seeder(worker_data->context);
+		auto seedRange = [&](const int start, const int end, const int total_query_len)
 		{
-			assert(mv.a[j].x == minimizers[j].x);
-			assert(mv.a[j].y == minimizers[j].y);
-		}
+			auto minimizers = seeder.collectMinimizers(start, end, total_query_len);
+			seeder.filters.minimizer_freq.filter(minimizers,
+												 config.seed_cfg.seed_occurrence_threshold,
+												 config.seed_cfg.query_occurrence_fraction);
 
-		auto [seeds, err_data] = seeder.collectMatches(i, minimizers);
-
-		// TEST Matches
-		for (int j = 0; j < seeds.queries.size(); ++j)
-		{
-			assert(seeds.queries[j].span == err_data.minimizer_positions[j].span());
-			assert(seeds.queries[j].query_pos == err_data.minimizer_positions[j].position());
-		}
-
-		auto [fragment_offset, _] = input->getOffset(i);
-		auto anchors = seeder.collectAnchorsHeap(seeds, input->segments.names[fragment_offset],
-											 input->fragment_lengths[i]);
-
-		// Utils::radixSortIterative(
-		// 	anchors.data(),
-		// 	anchors.data() + anchors.size(),
-		// 	[](const SharedMapTypes::Anchor &a)
-		// 	{
-		// 		return a.x; // keyExtractor — mimics minimap2’s radix key
-		// 	});
-		// TEST anchors
-		assert(n_a == anchors.size());
-		assert(seeds.repetitive_length == rep_len);
-		vector<pair<uint64_t, uint64_t>> anchor_vec;
-		for (int j = 0; j < anchors.size(); ++j)
-		{
-			anchor_vec.emplace_back(c_anchors[j].x, c_anchors[j].y);
-			if (j > 0)
+			// TEST Minimizers
+			assert(minimizers.size() == mv.n);
+			for (int j = 0; j < minimizers.size(); ++j)
 			{
-				assert(c_anchors[j].x >= c_anchors[j - 1].x);
+				assert(mv.a[j].x == minimizers[j].x);
+				assert(mv.a[j].y == minimizers[j].y);
 			}
-		}
-		vector<bool> founds(anchors.size(), false);
-		for (int j = 0; j < anchors.size(); ++j)
-		{
-			assert(anchor_vec[j].first == anchors[j].x);
-			// bool found = false;
-			// for(int k = 0; k < anchors.size(); ++k){
-			// 	if(anchors[j].x == anchor_vec[k].first && anchors[j].y == anchor_vec[k].second && !founds[k]){
-			// 		found = true;
-			// 		founds[k] = true;
-			// 		break;
-			// 	}
-			// }
-			// assert(found);
-		}
-		// assert(seeds.queries.size() == seeds.offsets.size() - 1 || (seeds.queries.empty() && seeds.offsets.empty()));
+			////////////////
+			auto [seeds, err_data] = seeder.collectMatches(minimizers, total_query_len);
 
-		// for (int j = 0; j < seeds.queries.size(); ++j)
-		// {
-		// 	assert((seeds.queries[j].query_pos << 1 | seeds.queries[j].strand) == m[j].q_pos);
-		// 	assert(seeds.queries[j].is_tandem == m[j].is_tandem);
-		// 	assert(seeds.queries[j].span == m[j].q_span);
-		// 	assert(seeds.queries[j].seg_id == m[j].seg_id);
-		// 	assert(seeds.queries[j].filter == m[j].flt);
-		// 	assert(seeds.minimizer_positions[j].data == mini_pos[j]);
-		// }
+			// TEST Matches
+			for (int j = 0; j < seeds.queries.size(); ++j)
+			{
+				assert(seeds.queries[j].span() == err_data.minimizer_positions[j].span);
+				assert(seeds.queries[j].query_pos == err_data.minimizer_positions[j].position);
+			}
+
+			///////////////
+			auto anchors = config.isFlagSet(FlagBits::USE_HEAP_SORT)
+							   ? seeder.collectAnchorsHeap(seeds, input->segments.names[start], total_query_len)
+							   : seeder.collectAnchors(seeds, input->segments.names[start], total_query_len);
+			// TEST anchors
+			assert(n_a == anchors.size());
+			assert(seeds.repetitive_length == rep_len);
+			vector<pair<uint64_t, uint64_t>> anchor_vec;
+			for (int j = 0; j < anchors.size(); ++j)
+			{
+				anchor_vec.emplace_back(c_anchors[j].x, c_anchors[j].y);
+			}
+			vector<bool> founds(anchors.size(), false);
+			for (int j = 0; j < anchors.size(); ++j)
+			{
+				assert(anchor_vec[j].first == anchors[j].x);
+			}
+			/////////////
+			if (config.isFlagSet(FlagBits::SEED_DEBUG_MODE))
+			{
+				seeder.debugPrint(seeds, anchors); // TODO: test this
+			}
+			return anchors;
+		};
+
+		// chain
+		const auto &chain_cfg = config.chain_cfg;
+		Chainer::ChainParams chain_params;
+		auto setChainParams = [&](int fragment)
+		{
+			if (config.isFlagSet(FlagBits::SHORT_READ))
+			{
+				chain_params.max_query_gap = std::max(input->fragment_lengths[fragment], chain_cfg.max_query_gap);
+			}
+			else
+			{
+				chain_params.max_query_gap = chain_cfg.max_query_gap;
+			}
+
+			if (chain_cfg.max_ref_gap > 0)
+			{
+				chain_params.max_ref_gap = chain_cfg.max_ref_gap; // always honor max_chain_gap_ref if set
+			}
+			else if (chain_cfg.max_fragment_length > 0)
+			{
+				chain_params.max_ref_gap = std::max(chain_cfg.max_fragment_length - input->fragment_lengths[fragment],
+													chain_cfg.max_query_gap);
+			}
+			else
+			{
+				chain_params.max_ref_gap = chain_cfg.max_query_gap;
+			}
+
+			chain_params.chain_penalty_gap = chain_cfg.chain_gap_scale * 0.01 * context->mm2_index->k;
+			chain_params.chain_penalty_skip = chain_cfg.chain_skip_scale * 0.01 * context->mm2_index->k;
+
+			// test params are set
+			assert(chain_params.chain_penalty_gap == chn_pen_gap);
+			assert(chain_params.chain_penalty_skip == chn_pen_skip);
+			assert(chain_params.max_query_gap == max_chain_gap_qry);
+			assert(chain_params.max_ref_gap == max_chain_gap_ref_old);
+		};
+
+		if (config.isFlagSet(FlagBits::INDEPENDENT_SEGMENTS))
+		{
+			// TODO: test independent segment flag for seeding
+		}
+		else
+		{
+			int start_index = input->fragment_index[i];
+			int end_index = input->fragment_index[i + 1];
+			assert(end_index - start_index == s->n_seg[i]);
+			assert(qlen_sum == qlen_sum_old);
+			auto anchors = seedRange(start_index, end_index, qlen_sum);
+
+
+		}
 
 		//////////////////////////
 		mm_map_frag(s->p->mi, s->n_seg[i], qlens, qseqs, &s->n_reg[off], &s->reg[off], b, s->p->opt, s->seq[off].name);
@@ -872,16 +948,30 @@ static void *worker_pipeline(void *shared, int step, void *in)
 																	  // TODO: p->n_processed = total_segments; once below code is removed
 		}
 		// init map context
-
+		auto opt = p->opt;
 		MapperConfig cfg = {
 			.flags = p->opt->flag,
-			.paired_end_orientation = bitset<2>(p->opt->pe_ori),
+			.paired_end_orientation = bitset<2>(opt->pe_ori),
 			.seed_cfg = MapperConfig::SeederConfig{
-				.query_occurrence_fraction = p->opt->q_occ_frac,
-				.seed_occurrence_threshold = p->opt->mid_occ,
-				.hard_seed_occurrence_threshold = p->opt->max_max_occ,
-				.seed_occurrence_distance = p->opt->occ_dist,
-				.sdust_threshold = p->opt->sdust_thres,
+				.query_occurrence_fraction = opt->q_occ_frac,
+				.seed_occurrence_threshold = opt->mid_occ,
+				.hard_seed_occurrence_threshold = opt->max_max_occ,
+				.seed_occurrence_distance = opt->occ_dist,
+				.sdust_threshold = opt->sdust_thres,
+			},
+			.chain_cfg = MapperConfig::ChainerConfig{
+				.max_query_gap = opt->max_gap,
+				.max_ref_gap = opt->max_gap_ref,
+				.max_fragment_length = opt->max_frag_len,
+				.max_skip = opt->max_chain_skip,
+				.max_predecessors = opt->max_chain_iter,
+				.bandwidth = opt->bw,
+				.bandwidth_long = opt->bw_long,
+				.min_chain_anchors = opt->min_cnt,
+				.min_chain_score = opt->min_chain_score,
+				.chain_gap_scale = opt->chain_gap_scale,
+				.chain_skip_scale = opt->chain_skip_scale,
+
 			}};
 		worker_data->context = make_shared<MappingContext>(
 			cfg,

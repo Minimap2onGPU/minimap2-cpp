@@ -539,7 +539,7 @@ Anchors Seeder::collectAnchorsHeap(const Seeds &seeds, const std::string &query_
 
 void Seeder::debugPrint(const Seeds &seeds, const Anchors &anchors) const
 {
-
+    std::lock_guard<std::mutex> lock(Seeder::debug_print_mutex);
     std::cerr << "RS\t" << seeds.repetitive_length << std::endl;
 
     for (size_t i = 0; i < anchors.size(); ++i)

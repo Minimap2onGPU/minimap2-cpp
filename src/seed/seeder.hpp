@@ -4,6 +4,7 @@
 #include "../types.hpp"
 #include <cassert>
 #include <vector>
+#include <mutex>
 
 using SeedTypes::Minimizer;
 using SeedTypes::Minimizers;
@@ -32,7 +33,11 @@ public:
 
     Filters filters;
 
+    void debugPrint(const Seeds &seeds, const Anchors &anchors) const;
+
 private:
+    static inline std::mutex debug_print_mutex;
+
     // EFFECT: Find symmetric (w,k)-minimizers on a DNA sequence
     void sketch(Minimizers &out, const string &sequence, const uint32_t readID) const;
 
@@ -49,8 +54,6 @@ private:
 
     SeedDecision decide(const Seeds::SeedHitRef ref_position, const Seeds::SeedHitQuery &query,
                         const string &query_name, const int total_query_len) const;
-
-    void debugPrint(const Seeds &seeds, const Anchors &anchors) const;
 
     // fast queue used for sketch
     struct TinyQueue
