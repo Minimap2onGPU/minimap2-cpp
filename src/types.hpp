@@ -203,8 +203,8 @@ namespace SharedMapTypes
         constexpr bool isReverseStrand() const { return (x & STRAND_MASK) != 0; }
 
         constexpr uint32_t queryPos() const { return static_cast<uint32_t>(y); }
-        constexpr uint8_t span() const { return static_cast<uint8_t>(y >> 32); }
-        constexpr uint8_t segId() const { return static_cast<uint8_t>(y >> MM_SEED_SEG_SHIFT); }
+        constexpr uint32_t span() const { return static_cast<uint32_t>((y >> 32) & 0xFF); }
+        constexpr uint32_t segId() const { return static_cast<uint32_t>((y >> MM_SEED_SEG_SHIFT) & 0xFF); }
         constexpr bool isTandem() const { return (y & MM_SEED_TANDEM) != 0; }
         constexpr bool isSelf() const { return (y & MM_SEED_SELF) != 0; }
 
@@ -221,27 +221,11 @@ namespace SharedMapTypes
         vector<SeedTypes::MinimizerPosition> minimizer_positions; // equivalent to mini_pos in C vers.
     };
 
-    struct ChainMetadata
-    {
-        int32_t score;
-        uint32_t anchor_count;
-        uint32_t ref_start;
-        uint32_t ref_end;
-
-        static constexpr uint32_t radixSortKey(const ChainMetadata &c)
-        {
-            assert(c.score >= 0 && "Score must be non-negative for radix sort");
-            return c.score;
-        }
-    };
-
     struct Chains
     {
-        Anchors anchors;
-        vector<int32_t> scores;
-        vector<uint32_t> anchor_counts;
-        vector<uint32_t> ref_start;
-        vector<uint32_t> ref_end;
+        Anchors anchors; // a
+        vector<int32_t> scores; // u's upper 32 bits
+        vector<uint32_t> anchor_indices; // u's lower 32 bits
     };
 }
 

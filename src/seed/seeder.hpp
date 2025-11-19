@@ -13,11 +13,16 @@ using SharedMapTypes::Anchors;
 using SharedMapTypes::ErrEstimationData;
 using std::vector;
 
-class Seeder : public MappingVisitor
+class Seeder
 {
 public:
     explicit Seeder(shared_ptr<MappingContext> ctx);
-    void visit() override final;
+
+    /**
+     * @start_index: start offset into inputs to seed
+     * @end_index: ending offset into inputs to seed
+     */
+    vector<Anchors> visit(const int start_index, const int end_index);
 
     // TODO: make private once tested
     // collect minimizers from input fragment
@@ -34,14 +39,15 @@ public:
     Filters filters;
 
     void debugPrint(const Seeds &seeds, const Anchors &anchors) const;
+    void populateSeeds(Seeds &seeds, const Minimizers &minimizers) const;
 
 private:
+    shared_ptr<MappingContext> context;
+
     static inline std::mutex debug_print_mutex;
 
     // EFFECT: Find symmetric (w,k)-minimizers on a DNA sequence
     void sketch(Minimizers &out, const string &sequence, const uint32_t readID) const;
-
-    void populateSeeds(Seeds &seeds, const Minimizers &minimizers) const;
 
     void processedSelectedSeeds(Seeds &seeds, ErrEstimationData &err_data) const;
 

@@ -10,10 +10,12 @@
 #include "../../mmpriv.h"
 #include "../utils.hpp"
 
-void Seeder::visit()
+vector<Anchors> Seeder::visit(const int start_index, const int end_index)
 {
     const auto &config = context->config;
     const auto &input = context->input;
+
+    vector<Anchors> res;
 
     auto seedRange = [&](const int start, const int end, const int total_query_len)
     {
@@ -30,30 +32,35 @@ void Seeder::visit()
         {
             debugPrint(seeds, anchors);
         }
+        res.push_back(std::move(anchors));
     };
 
     if (config.isFlagSet(FlagBits::INDEPENDENT_SEGMENTS))
     {
         // seed each segment independently
         const auto &sequences = input->segments.sequences;
-        for (int i = 0; i < sequences.size(); ++i)
+        assert(end_index < sequences.size());
+        for (int i = start_index; i < end_index; ++i)
         {
             seedRange(i, i + 1, sequences[i].size());
         }
     }
     else
     {
+        assert(end_index < input->getNumFragments());
         // seed each segment within its fragment
-        for (int i = 0; i < input->getNumFragments(); ++i)
+        for (int i = start_index; i < end_index; ++i)
         {
             const auto [start, end] = input->getOffset(i);
             const auto total_query_len = input->fragment_lengths[i];
             seedRange(start, end, total_query_len);
         }
     }
+
+    return res;
 }
 
-Seeder::Seeder(shared_ptr<MappingContext> ctx) : MappingVisitor(ctx), filters() {};
+Seeder::Seeder(shared_ptr<MappingContext> ctx) : context(ctx), filters() {};
 
 Minimizers Seeder::collectMinimizers(const int start_index, const int end_index, const int total_query_len) const
 {
