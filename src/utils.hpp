@@ -1,3 +1,30 @@
+/* The MIT License
+
+   Copyright (c) 2008, 2011 Attractive Chaos <attractor@live.co.uk>
+
+   Permission is hereby granted, free of charge, to any person obtaining
+   a copy of this software and associated documentation files (the
+   "Software"), to deal in the Software without restriction, including
+   without limitation the rights to use, copy, modify, merge, publish,
+   distribute, sublicense, and/or sell copies of the Software, and to
+   permit persons to whom the Software is furnished to do so, subject to
+   the following conditions:
+
+   The above copyright notice and this permission notice shall be
+   included in all copies or substantial portions of the Software.
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+   EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+   NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
+   BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+   ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+   CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+   SOFTWARE.
+*/
+
+// This is a C++ version of ksort.h supporting iterators and custom sort keys
+
 #pragma once
 #include "types.hpp"
 #include <concepts>
@@ -5,76 +32,186 @@
 #include <array>
 #include <algorithm>
 #include <stack>
+#include <cassert>
+#include <cstddef>
+#include <type_traits>
+#include <algorithm>
+#include <cstdint>
 
 namespace Utils
 {
-    constexpr int BITS_PER_BYTE = 8;
-    constexpr int RADIX = 1 << BITS_PER_BYTE;
-    constexpr int REG_SORT_MAX = 64;
+    constexpr int RS_MIN_SIZE = 64;
+    constexpr int RS_MAX_BITS = 8;
 
-    template <typename RandomIt, typename KeyFunc>
-    void radixSort(RandomIt first, RandomIt last, KeyFunc key)
+    //  Insertion sort
+    template <typename T, typename KeyFunc>
+    void insertionSortSmallRange(T *begin, T *end, KeyFunc key)
     {
-        using Elem = typename std::iterator_traits<RandomIt>::value_type;
-        using T = decltype(key(*first));
-        static_assert(std::is_unsigned_v<T>, "radixSort requires unsigned key type");
-
-        const std::size_t n = std::distance(first, last);
-        if (n <= REG_SORT_MAX)
+        for (T *i = begin + 1; i < end; ++i)
         {
-            std::sort(first, last, [&](const Elem &a, const Elem &b)
-                      { return key(a) < key(b); });
-            return;
+            if (key(*i) < key(*(i - 1)))
+            {
+                T tmp = *i;
+                T *j = i;
+                while (j > begin && key(tmp) < key(*(j - 1)))
+                {
+                    *j = *(j - 1);
+                    --j;
+                }
+                *j = tmp;
+            }
         }
+    }
 
-        static constexpr int NUM_BYTES_PASSES = sizeof(T) * BITS_PER_BYTE;
+    //  MSD Radix Sort - recursive
+    template <typename T, typename KeyFunc>
+    void radixSortRecursive(T *begin, T *end,
+                            int bitsPerPass,
+                            int shift,
+                            KeyFunc key)
+    {
+        using KeyT = decltype(key(*begin));
+        static_assert(std::is_unsigned_v<KeyT>,
+                      "radixSort requires key() to return an unsigned integer.");
 
-        std::vector<Elem> tmp(n);
-        std::array<std::size_t, RADIX + 1> count;
+        const int bucketCount = 1 << bitsPerPass; // e.g. 256
+        const int bucketMask = bucketCount - 1;
 
-        bool flip = false;
-
-        int shift = 0;
-        auto computePass = [&](RandomIt src, RandomIt src_end, RandomIt dst)
+        struct Bucket
         {
-            count.fill(0);
-
-            for (auto it = src; it != src_end; ++it)
-            {
-                ++count[((key(*it) >> shift) & (RADIX - 1)) + 1]; // want prefix count to represent start, hence + 1 to the next boundary
-            }
-
-            for (std::size_t i = 1; i < RADIX; ++i)
-            {
-                count[i] += count[i - 1];
-            }
-
-            for (auto it = src; it != src_end; ++it)
-            {
-                std::size_t idx = (key(*it) >> shift) & (RADIX - 1);
-                dst[count[idx]++] = *it;
-            }
+            T *writePtr; // b
+            T *endPtr;   // e
         };
 
-        for (; shift < NUM_BYTES_PASSES; shift += BITS_PER_BYTE)
+        // Exactly match: Bucket b[1 << RS_MAX_BITS]
+        Bucket buckets[1 << RS_MAX_BITS];
+        Bucket *bucketsEnd = buckets + bucketCount;
+
+        assert(bitsPerPass <= RS_MAX_BITS);
+
+        // Initialize bucket pointers
+        for (Bucket *b = buckets; b != bucketsEnd; ++b)
+            b->writePtr = b->endPtr = begin;
+
+        // Counting pass – increment endPtr for each key
+        for (T *it = begin; it != end; ++it)
         {
-            if (flip)
+            std::size_t idx = (key(*it) >> shift) & bucketMask;
+            ++buckets[idx].endPtr;
+        }
+
+        // Prefix sum: set each bucket's [writePtr, endPtr)
+        for (Bucket *b = buckets + 1; b != bucketsEnd; ++b)
+        {
+            b->endPtr = b->endPtr + ((b - 1)->endPtr - begin);
+            b->writePtr = (b - 1)->endPtr;
+        }
+
+        // In-place cycle permutation
+        // NOTE: is unstable
+        for (Bucket *bucket = buckets; bucket != bucketsEnd;)
+        {
+            if (bucket->writePtr != bucket->endPtr)
             {
-                computePass(tmp.begin(), tmp.end(), first);
+                Bucket *targetBucket =
+                    buckets + ((key(*bucket->writePtr) >> shift) & bucketMask);
+
+                if (targetBucket != bucket)
+                {
+                    // Start cycle
+                    T tmp = *bucket->writePtr;
+                    T swapTmp;
+
+                    do
+                    {
+                        swapTmp = tmp;
+                        tmp = *targetBucket->writePtr;
+                        *targetBucket->writePtr++ = swapTmp;
+
+                        targetBucket =
+                            buckets + ((key(tmp) >> shift) & bucketMask);
+
+                    } while (targetBucket != bucket);
+
+                    *bucket->writePtr++ = tmp;
+                }
+                else
+                {
+                    ++bucket->writePtr;
+                }
             }
             else
             {
-                computePass(first, last, tmp.begin());
+                ++bucket;
             }
-
-            flip = !flip;
         }
-        if (flip)
+
+        buckets[0].writePtr = begin;
+        for (Bucket *b = buckets + 1; b != bucketsEnd; ++b)
+            b->writePtr = (b - 1)->endPtr;
+
+        if (shift)
         {
-            std::move(tmp.begin(), tmp.end(), first);
+            int nextShift = (shift > bitsPerPass) ? shift - bitsPerPass : 0;
+
+            for (Bucket *b = buckets; b != bucketsEnd; ++b)
+            {
+                std::ptrdiff_t len = b->endPtr - b->writePtr;
+
+                if (len > RS_MIN_SIZE)
+                {
+                    radixSortRecursive<T>(b->writePtr, b->endPtr,
+                                          bitsPerPass, nextShift, key);
+                }
+                else if (len > 1)
+                {
+                    insertionSortSmallRange<T>(b->writePtr, b->endPtr, key);
+                }
+            }
         }
     }
+
+    /**
+     * Raw pointer wrapper of radix sort
+     */
+    template <typename T, typename KeyFunc>
+    void radixSort(T *begin, T *end, KeyFunc key)
+    {
+        using KeyT = decltype(key(*begin));
+        static_assert(std::is_unsigned_v<KeyT>, "key() must return unsigned type.");
+        auto num_elems = end - begin;
+        if (num_elems <= RS_MIN_SIZE)
+        {
+            if (num_elems > 1)
+                insertionSortSmallRange<T>(begin, end, key);
+            return;
+        }
+
+        const int initialShift =
+            (static_cast<int>(sizeof(KeyT)) - 1) * RS_MAX_BITS;
+
+        radixSortRecursive<T>(begin, end, RS_MAX_BITS, initialShift, key);
+    }
+
+    /**
+     * Random iterator wrapper of radix sort
+     */
+    template <typename RandomIt, typename KeyFunc>
+    void radixSort(RandomIt first, RandomIt last, KeyFunc key)
+    {
+        using T = typename std::iterator_traits<RandomIt>::value_type;
+
+        static_assert(std::contiguous_iterator<RandomIt>,
+                      "radixSort requires contiguous iterators");
+
+        T *begin = std::to_address(first);
+        T *end = begin + (last - first);
+
+        radixSort(begin, end, key);
+    }
+
 }
+
 namespace std
 {
     template <>
