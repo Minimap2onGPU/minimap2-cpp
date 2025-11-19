@@ -1,6 +1,6 @@
 #include "aligner.hpp"
 
-Aligner::Aligner(shared_ptr<MappingContext> ctx) : MappingVisitor(ctx) {}
+Aligner::Aligner(shared_ptr<MappingContext> ctx) : context(ctx) {}
 
 void Aligner::visit()
 {

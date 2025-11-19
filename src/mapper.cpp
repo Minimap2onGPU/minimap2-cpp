@@ -8,15 +8,15 @@
 void Mapper::map(shared_ptr<MappingContext> ctx)
 {
     reverseComplements(ctx);
-    std::vector<std::unique_ptr<MappingVisitor>> visitors;
-    visitors.emplace_back(std::make_unique<Seeder>(ctx));
-    visitors.emplace_back(std::make_unique<Chainer>(ctx));
-    visitors.emplace_back(std::make_unique<Aligner>(ctx));
+    const size_t max_end_index = ctx->config.isFlagSet(FlagBits::INDEPENDENT_SEGMENTS)
+                                     ? ctx->input->getNumFragments()
+                                     : ctx->input->segments.sequences.size();
 
-    for (auto &visitor : visitors)
-    {
-        visitor->visit();
-    }
+    // TODO: implement thread-based memory pools
+    // pools process some contiguos batch of inputs
+    auto anchors = runVisitor<Seeder>(ctx, 0, max_end_index);
+    runVisitor<Chainer>(ctx, anchors, 0);
+
     reverseComplements(ctx); // TODO: need to also update Aligner results;
 }
 
@@ -65,5 +65,3 @@ void Mapper::reverseComplement(std::string &sequence, std::string &quality)
         std::reverse(quality.begin(), quality.end());
     }
 }
-
-MappingVisitor::MappingVisitor(shared_ptr<MappingContext> ctx) : context(ctx) {};

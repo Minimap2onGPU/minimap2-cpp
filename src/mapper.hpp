@@ -21,6 +21,10 @@ enum class FlagBits : uint64_t
     QUERY_STRAND_MODE = MM_F_QSTRAND,
     USE_HEAP_SORT = MM_F_HEAP_SORT,
     SEED_DEBUG_MODE = MM_DBG_PRINT_SEED,
+    SHORT_READ = MM_F_SR,
+    SHORT_READ_RNA = MM_F_SR_RNA,
+    CHAIN_RMQ_MODE = MM_F_RMQ,
+    SPLICE_MODE = MM_F_SPLICE,
 };
 
 struct MapperConfig
@@ -41,6 +45,21 @@ struct MapperConfig
         const int32_t seed_occurrence_distance;
         const int sdust_threshold; // DUST threshold for low-complexity filtering (0 = disabled)
     } seed_cfg;
+
+    struct ChainerConfig
+    {
+        const int max_query_gap;
+        const int max_ref_gap;
+        const int max_fragment_length;
+        const int max_skip;
+        const int max_predecessors;
+        const int bandwidth;
+        const int bandwidth_long;
+        const int min_chain_anchors;
+        const int min_chain_score;
+        const float chain_gap_scale;
+        const float chain_skip_scale;
+    } chain_cfg;
 };
 
 struct MappingContext
@@ -48,33 +67,33 @@ struct MappingContext
     const MapperConfig config;
     const shared_ptr<mm_idx_t> mm2_index;
     const shared_ptr<InputDataFragments> input;
-    shared_ptr<MappingOutputData> output;
 
     MappingContext(const MapperConfig &cfg,
                    const shared_ptr<mm_idx_t> &mi,
-                   const shared_ptr<InputDataFragments> &in,
-                   const shared_ptr<MappingOutputData> &out)
-        : config(cfg), mm2_index(mi), input(in), output(out) {}
+                   const shared_ptr<InputDataFragments> &in)
+        : config(cfg), mm2_index(mi), input(in) {}
+};
+
+template <typename T, typename... Args>
+concept MappingVisitor = requires(T obj, std::shared_ptr<MappingContext> ctx, Args &&...args) {
+    { T(ctx) } -> std::same_as<T>;
+    { obj.visit(std::forward<Args>(args)...) };
 };
 
 class Mapper
 {
-    void reverseComplement(std::string &sequence, std::string &quality);
-
 public:
     // TODO: make this private once done testing
     void reverseComplements(shared_ptr<MappingContext> ctx);
     void map(shared_ptr<MappingContext> ctx);
-};
 
-class MappingVisitor
-{
-protected:
-    shared_ptr<MappingContext> context;
-    // Only allow construction with context
-    explicit MappingVisitor(shared_ptr<MappingContext> ctx);
+    template <typename Visitor, typename... Args>
+    requires MappingVisitor<Visitor, Args...>
+    auto runVisitor(std::shared_ptr<MappingContext> ctx, Args&&... args) {
+        Visitor visitor(ctx);
+        return visitor.visit(std::forward<Args>(args)...);
+    }
 
-public:
-    virtual void visit() = 0;
-    virtual ~MappingVisitor() = default;
+private:
+    void reverseComplement(std::string &sequence, std::string &quality);
 };
