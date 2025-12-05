@@ -119,7 +119,7 @@ void Seeder::sketch(Minimizers &out, const std::string &sequence, const uint32_t
     Minimizer min(UINT64_MAX, UINT64_MAX);
     TinyQueue tq;
 
-    auto emit_duplicates = [&](int start, int end)
+    auto emitDuplicates = [&](int start, int end)
     {
         for (int j = start; j < end; ++j)
         {
@@ -130,7 +130,7 @@ void Seeder::sketch(Minimizers &out, const std::string &sequence, const uint32_t
         }
     };
 
-    auto find_new_min = [&]()
+    auto findNewMin = [&]()
     {
         min.x = UINT64_MAX;
         for (int j = buf_pos + 1; j < window_size; ++j)
@@ -204,8 +204,8 @@ void Seeder::sketch(Minimizers &out, const std::string &sequence, const uint32_t
         // special case: first full window
         if (num_valid_kmers == window_size + kmer_length - 1 && min.x != UINT64_MAX)
         {
-            emit_duplicates(buf_pos + 1, window_size);
-            emit_duplicates(0, buf_pos);
+            emitDuplicates(buf_pos + 1, window_size);
+            emitDuplicates(0, buf_pos);
         }
 
         if (info.x <= min.x)
@@ -220,13 +220,13 @@ void Seeder::sketch(Minimizers &out, const std::string &sequence, const uint32_t
             if (num_valid_kmers >= window_size + kmer_length - 1 && min.x != UINT64_MAX)
                 out.push_back(min);
 
-            find_new_min();
+            findNewMin();
 
             // output identical k-mers
             if (num_valid_kmers >= window_size + kmer_length - 1 && min.x != UINT64_MAX)
             {
-                emit_duplicates(buf_pos + 1, window_size);
-                emit_duplicates(0, buf_pos);
+                emitDuplicates(buf_pos + 1, window_size);
+                emitDuplicates(0, buf_pos);
             }
         }
 

@@ -193,5 +193,3 @@ sdust.o: kalloc.h kdq.h kvec.h sdust.h
 seed.o: mmpriv.h minimap.h bseq.h kseq.h kalloc.h ksort.h
 sketch.o: kvec.h kalloc.h mmpriv.h minimap.h bseq.h kseq.h
 splitidx.o: mmpriv.h minimap.h bseq.h kseq.h
-file_reader.o: src/file_reader.hpp
-types.o: src/types.hpp

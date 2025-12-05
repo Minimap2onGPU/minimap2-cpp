@@ -2,7 +2,7 @@
 #include "mapper.hpp"
 #include "seed/seeder.hpp"
 #include "chain/chainer.hpp"
-#include "align/aligner.hpp"
+#include <algorithm>
 #include "types.hpp"
 
 void Mapper::map(shared_ptr<MappingContext> ctx)
