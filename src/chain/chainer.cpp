@@ -258,8 +258,6 @@ Chains Chainer::backtrackChains(const Anchors &anchors, const ChainParams &param
 
     const int32_t max_drop = params.is_cdna ? std::numeric_limits<int32_t>::max() : params.bandwidth;
 
-    std::fill(marked.begin(), marked.end(), Mark::UNUSED);
-
     // Helper: find the earliest valid chain endpoint
     auto findChainEnd = [&](int index) -> int64_t
     {
