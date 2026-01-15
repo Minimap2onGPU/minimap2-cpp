@@ -83,26 +83,30 @@ Chains Chainer::chainAnchors(const Anchors &anchors, const ChainParams &params)
     if (anchors.empty())
         return result;
 
-    // DP arrays
-
+    // Score arrays
     ScratchBuffers view(anchors.size());
 
     if (context->config.isFlagSet(FlagBits::CHAIN_RMQ_MODE))
     {
         // If the RMQ mode is set, call the RMQ-style chaining
-        // e.g., computeAnchorRMQ(anchors, params, best_score, predecessor);
+        computeRMQ(anchors, params, view);
     }
     else
     {
         // Otherwise, use the normal DP-based chaining
-        computeDPTables(anchors, params, view);
+        computeDP(anchors, params, view);
     }
 
     result = backtrackChains(std::move(anchors), params, view);
     return result;
 }
 
-void Chainer::computeDPTables(const Anchors &anchors, const ChainParams &params, ScratchBuffers &view)
+void Chainer::computeRMQ(const Anchors &anchors, const ChainParams &params, ScratchBuffers &view)
+{
+    throw std::runtime_error("Chain RMQ not implemented yet");
+}
+
+void Chainer::computeDP(const Anchors &anchors, const ChainParams &params, ScratchBuffers &view)
 {
     const int64_t n = static_cast<int64_t>(anchors.size());
 
@@ -294,8 +298,8 @@ Chains Chainer::backtrackChains(const Anchors &anchors, const ChainParams &param
     // -- chain0 -- , --------- chain1 ---------
     // [0 ... count0, count0+1 ... count0+count1] <- flat indicies
     std::vector<ScoreCount> score_count;
-    score_count.reserve(num_valid);                                                                 // estimate since # chains <= num_valid
-    std::span<uint32_t> flat_anchor_indices = {reinterpret_cast<uint32_t *>(view.extra.data()), n}; // estimate since # total anchors <= n
+    score_count.reserve(num_valid);                                                                 // overestimate since # chains <= num_valid
+    std::span<uint32_t> flat_anchor_indices = {reinterpret_cast<uint32_t *>(view.extra.data()), n}; // overestimate since # total anchors <= n
 
     int64_t anchor_count = 0;
 
@@ -390,17 +394,17 @@ Chains Chainer::constructChains(const Anchors &anchors, const std::vector<ScoreC
     return chains;
 }
 
-int32_t Chainer::computeChainingScore(const Anchor &current,
-                                      const Anchor &previous,
-                                      const ChainParams &params) const
+// Compute incremental chaining score between two anchors
+int32_t Chainer::computeChainingScore(const Anchor &curr, const Anchor &prev,
+                                      const ChainParams &params)
 {
     // Distances along query and reference
-    int32_t query_dist = static_cast<int32_t>(current.queryPos() - previous.queryPos());
-    int32_t ref_dist = static_cast<int32_t>(current.refPos() - previous.refPos());
+    int32_t query_dist = static_cast<int32_t>(curr.queryPos() - prev.queryPos());
+    int32_t ref_dist = static_cast<int32_t>(curr.refPos() - prev.refPos());
 
     // Segment IDs
-    int32_t curr_seg_id = current.segId();
-    int32_t prev_seg_id = previous.segId();
+    int32_t curr_seg_id = curr.segId();
+    int32_t prev_seg_id = prev.segId();
 
     // Early exits: anchors too far apart or wrong direction
     if (query_dist <= 0 || query_dist > params.max_query_gap)
@@ -424,7 +428,7 @@ int32_t Chainer::computeChainingScore(const Anchor &current,
         return std::numeric_limits<int32_t>::min();
 
     // Base chaining score: smaller of previous anchor span or diagonal distance
-    int32_t prev_span = previous.span();
+    int32_t prev_span = prev.span();
     int32_t chain_score = std::min(prev_span, min_dist);
 
     // Penalty adjustments
@@ -451,4 +455,35 @@ int32_t Chainer::computeChainingScore(const Anchor &current,
     }
 
     return chain_score;
+}
+
+std::tuple<int32_t, int32_t, int32_t> Chainer::computeChainingScoreSimple(const Anchor &current, const Anchor &previous,
+                                                                          const ChainParams &params)
+{
+    const int32_t dq = static_cast<int32_t>(current.queryPos() - previous.queryPos());
+    const int32_t dr = static_cast<int32_t>(current.refPos() - previous.refPos());
+
+    const int32_t dd = std::abs(dr - dq); // diagonal difference
+    const int32_t dg = std::min(dr, dq);  // min distance
+
+    const int32_t q_span = static_cast<int32_t>(previous.span());
+
+    int32_t sc = std::min(q_span, dg);
+
+    const int32_t width = dd;
+    const int32_t exact = (dd == 0 && dg <= q_span);
+
+    if (dd > 0 || dq > q_span)
+    {
+        const float lin_pen =
+            params.chain_penalty_gap * static_cast<float>(dd) +
+            params.chain_penalty_skip * static_cast<float>(dg);
+
+        const float log_pen =
+            dd >= 1 ? std::log2(static_cast<float>(dd + 1)) : 0.0f;
+
+        sc -= static_cast<int32_t>(lin_pen + 0.5f * log_pen);
+    }
+
+    return {sc, width, exact};
 }

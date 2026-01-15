@@ -2,6 +2,7 @@
 #include "mapper.hpp"
 #include <vector>
 #include <span>
+#include <tuple>
 
 using SharedMapTypes::Anchor;
 using SharedMapTypes::Anchors;
@@ -20,7 +21,6 @@ public:
      */
     vector<Chains> visit(const vector<Anchors> &anchors, const int offset);
 
-    // TODO: make private after testing
     struct ChainParams
     {
         bool is_cdna;
@@ -80,33 +80,40 @@ public:
         std::vector<std::byte> buffer;
     };
 
-    Chains chainAnchors(const Anchors &anchors, const ChainParams &params);
-
-    // Compute DP scores and predecessors internally
-    // Returns: true if need to backtrack
-    void computeDPTables(const Anchors &anchors,
-                         const ChainParams &params,
-                         ScratchBuffers &view);
-
-    // Backtrack the DP results into final Chains and consume anchors
-    Chains backtrackChains(const Anchors &anchors, const ChainParams &params,
-                           ScratchBuffers &view);
-
-    // Compute incremental chaining score between two anchors
-    int32_t computeChainingScore(const Anchor &curr, const Anchor &prev,
-                                 const ChainParams &params) const;
-
     struct ScoreCount
     {
         int32_t score;
         uint32_t count;
     };
 
+    shared_ptr<MappingContext> context;
+
+    Chains chainAnchors(const Anchors &anchors, const ChainParams &params);
+
+    // TODO: implement this
+    void computeRMQ(const Anchors &anchors,
+                    const ChainParams &params,
+                    ScratchBuffers &view);
+
+    // Compute DP scores and predecessors internally
+    void computeDP(const Anchors &anchors,
+                   const ChainParams &params,
+                   ScratchBuffers &view);
+
+    // Backtrack the DP results into final Chains and consume anchors
+    Chains backtrackChains(const Anchors &anchors, const ChainParams &params,
+                           ScratchBuffers &view);
+
     static Chains constructChains(const Anchors &anchors, const std::vector<ScoreCount> &score_count,
                                   std::span<uint32_t> flat_anchor_indices, const int64_t anchor_count);
 
-private:
-    shared_ptr<MappingContext> context;
+    // Compute incremental chaining score between two anchors
+    static int32_t computeChainingScore(const Anchor &curr, const Anchor &prev,
+                                        const ChainParams &params);
+
+    // TODO: not tested yet
+    static std::tuple<int32_t, int32_t, int32_t> computeChainingScoreSimple(const Anchor &current, const Anchor &previous,
+                                                                            const ChainParams &params);
 
     constexpr bool canChain(const Anchor &a1, const Anchor &a2, const ChainParams &params) const
     {

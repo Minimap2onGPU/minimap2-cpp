@@ -5,7 +5,6 @@
 #include "../mmpriv.h"
 
 using IOTypes::InputDataFragments;
-using IOTypes::MappingOutputData;
 using std::bitset;
 using std::shared_ptr;
 

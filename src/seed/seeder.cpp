@@ -268,7 +268,7 @@ void Seeder::populateSeeds(Seeds &seeds, const Minimizers &minimizers) const
 
         int num_hits = 0;
 
-        // TODO: change this to use Seeds::SeedHitRef once index.c changes too
+        // TODO: change this to use Seeds::SeedHitRef once index.c changes to C++ too
         const uint64_t *ref_positions = mm_idx_get(context->mm2_index.get(), minimizer_hash, &num_hits);
 
         if (num_hits == 0)
@@ -463,7 +463,7 @@ Anchors Seeder::collectAnchorsHeap(const Seeds &seeds, const std::string &query_
     size_t forward_count = 0;
     size_t reverse_count = 0;
 
-    std::vector<HeapItem> container; // TODO: consider static thread_local to preserve acorss func calls
+    std::vector<HeapItem> container; // TODO: consider static thread_local to preserve across func calls (no alloc/dealloc overhead)
     container.reserve(seeds.queries.size());
     std::priority_queue<HeapItem, std::vector<HeapItem>, std::greater<>> heap(std::greater<>(), std::move(container));
 

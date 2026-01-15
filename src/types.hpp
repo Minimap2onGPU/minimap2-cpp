@@ -223,8 +223,8 @@ namespace SharedMapTypes
 
     struct Chains
     {
-        Anchors anchors; // a
-        vector<int32_t> scores; // u's upper 32 bits
+        Anchors anchors;                 // a
+        vector<int32_t> scores;          // u's upper 32 bits
         vector<uint32_t> anchor_indices; // u's lower 32 bits
     };
 }
@@ -242,6 +242,7 @@ namespace IOTypes
         void clear();
     };
 
+    // TODO: potential speedup here: use contiguous buffers instead of vecs of strings
     struct InputSegments
     { // i entry correspond to a single InputSegment
         vector<string> names;
@@ -269,35 +270,6 @@ namespace IOTypes
         int getNumFragments();
     };
 
-    struct MappingOutputData
-    {
-        // holds output data needed to write to files
-        struct FinalOutput
-        {
-            // per-segment info (when not independent reads, rep_len and frag_gaps has repeating data, i.e. same fragment has same data)
-            vector<int> representative_lengths;
-            vector<int> fragment_gaps;
-
-            // aligning output - per segment
-            vector<vector<mm_reg1_t>> regions;
-
-            void resize(const size_t size);
-        } final_output;
-
-        // holds information across seed, chain, align
-        struct IntermediateOutput
-        {
-            // # vec elems is 1 per segment if INDEPENDENT_SEG flag set, otherwise 1 per fragment
-            // vector<SeedTypes::Minimizers> minimizers;
-            // vector<SeedTypes::Seeds> seeds;
-            vector<SharedMapTypes::ErrEstimationData> err_data;
-
-            // output from seed & reused in chain
-            vector<SharedMapTypes::Anchors> anchors;
-
-            void resize(const size_t size);
-        } intermediate_output;
-    };
 }
 
 namespace MappingTables

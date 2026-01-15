@@ -21,6 +21,7 @@
 #include "src/utils.hpp"
 #include <unordered_map>
 
+// TODO: rm this after testing
 static int64_t mg_chain_bk_end_test(int32_t max_drop, const mm128_t *z, const int32_t *f, const int64_t *p, int32_t *t, int64_t k)
 {
 	int64_t i = z[k].y, end_i = -1, max_i = i;
@@ -43,6 +44,7 @@ static int64_t mg_chain_bk_end_test(int32_t max_drop, const mm128_t *z, const in
 	return max_i;
 }
 
+// TODO: rm this after testing
 static uint64_t *mg_chain_backtrack_test(void *km, int64_t n, const int32_t *f, const int64_t *p, int32_t *v, int32_t *t, int32_t min_cnt, int32_t min_sc, int32_t max_drop, int32_t *n_u_, int32_t *n_v_)
 {
 	mm128_t *z;
@@ -106,6 +108,7 @@ static uint64_t *mg_chain_backtrack_test(void *km, int64_t n, const int32_t *f, 
 	return u;
 }
 
+// TODO: rm this after testing
 static mm128_t *compact_a_test(void *km, int32_t n_u, uint64_t *u, int32_t n_v, int32_t *v, mm128_t *a, Anchors &anchors)
 {
 	mm128_t *b, *w;
@@ -157,7 +160,6 @@ static mm128_t *compact_a_test(void *km, int32_t n_u, uint64_t *u, int32_t n_v, 
 struct WorkerData
 {
 	shared_ptr<InputDataFragments> input;
-	shared_ptr<MappingOutputData> output;
 	shared_ptr<MappingContext> context;
 };
 ////////
@@ -1051,7 +1053,7 @@ static void worker_for(void *_data, long i, int tid) // kt_for() callback
 				// else
 				// {
 				// 	// Otherwise, use the normal DP-based chaining
-				// 	chainer.computeDPTables(anchors, chain_params, view);
+				// 	chainer.computeDP(anchors, chain_params, view);
 				// }
 				// Chainer::ScratchBuffers view_old(anchors.size());
 				// for (size_t k = 0; k < num_anchors; ++k)
@@ -1298,11 +1300,7 @@ static void *worker_pipeline(void *shared, int step, void *in)
 		/////////
 		if (worker_data->input != nullptr)
 		{
-			worker_data->output = make_shared<MappingOutputData>();
 			size_t total_segments = worker_data->input->segments.sequences.size();
-			worker_data->output->final_output.resize(total_segments); // each segment has a final output
-																	  // NOTE: we resize intermediate outputs in the Mapper.map() itself
-																	  // TODO: p->n_processed = total_segments; once below code is removed
 		}
 		// init map context
 		auto opt = p->opt;
@@ -1383,7 +1381,6 @@ static void *worker_pipeline(void *shared, int step, void *in)
 			// TODO: rm once done with test -> tmp reverse all paired_end reads
 			Mapper mapper;
 			mapper.reverseComplements(data->tmp_worker_data->context);
-			data->tmp_worker_data->output->intermediate_output.resize(data->n_frag);
 			///////////////
 			kt_for(p->n_threads, worker_for, data, data->n_frag);
 

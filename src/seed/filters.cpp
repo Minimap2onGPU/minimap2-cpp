@@ -1,4 +1,4 @@
-#include "filter_types.hpp"
+#include "filters.hpp"
 #include <algorithm>
 #include <numeric>
 #include <deque>
@@ -251,6 +251,7 @@ void MinimizerFrequencyFilter::filter(Minimizers &minimizers, const int32_t max_
         return;
     }
     std::unordered_map<uint64_t, uint64_t> freq;
+    freq.reserve(minimizers.size());
     for (const auto &minimizer : minimizers)
     {
         freq[minimizer.hash()]++;

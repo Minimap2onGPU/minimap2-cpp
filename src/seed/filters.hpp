@@ -6,10 +6,6 @@
 using SeedTypes::Minimizers;
 using SeedTypes::Seeds;
 
-// ============================================================================
-// ACTUAL FILTERS: These modify data in-place, removing unwanted elements
-// ============================================================================
-
 /**
  * DUST algorithm implementation for identifying low-complexity regions in DNA sequences.
  *
@@ -81,12 +77,8 @@ public:
     void filter(Minimizers &minimizers, const int32_t max_occurrence, const float max_occurrence_fraction) const;
 };
 
-// ============================================================================
-// MARKERS: These only mark elements for filtering, don't remove them
-// ============================================================================
-
 /**
- * Mark seeds that don't occur too often (sets filter=true flag, doesn't remove)
+ * Mark seeds that don't occur too often (sets filter=true flag but doesn't remove anything)
  */
 class SeedFrequencyMarker
 {

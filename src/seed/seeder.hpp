@@ -1,6 +1,6 @@
 #pragma once
 #include "mapper.hpp"
-#include "filter_types.hpp"
+#include "filters.hpp"
 #include "../types.hpp"
 #include <cassert>
 #include <vector>
@@ -24,7 +24,17 @@ public:
      */
     vector<Anchors> visit(const int start_index, const int end_index);
 
-    // TODO: make private once tested
+    enum class SeedDecision
+    {
+        ACCEPT,
+        ACCEPT_AS_SELF,
+        SKIP,
+    };
+
+    shared_ptr<MappingContext> context;
+    static inline std::mutex debug_print_mutex;
+    Filters filters;
+
     // collect minimizers from input fragment
     Minimizers collectMinimizers(const int start_index, const int end_index, const int total_query_len) const;
 
@@ -33,30 +43,17 @@ public:
 
     // Convert seeds to anchors, applying filtering and strand logic
     Anchors collectAnchors(const Seeds &seeds, const string &query_name, const int total_query_len) const;
-
     Anchors collectAnchorsHeap(const Seeds &seeds, const string &query_name, const int total_query_len) const;
-
-    Filters filters;
-
-    void debugPrint(const Seeds &seeds, const Anchors &anchors) const;
-    void populateSeeds(Seeds &seeds, const Minimizers &minimizers) const;
-
-private:
-    shared_ptr<MappingContext> context;
-
-    static inline std::mutex debug_print_mutex;
 
     // EFFECT: Find symmetric (w,k)-minimizers on a DNA sequence
     void sketch(Minimizers &out, const string &sequence, const uint32_t readID) const;
 
-    void processedSelectedSeeds(Seeds &seeds, ErrEstimationData &err_data) const;
+    // TODO: more testing needed
+    void debugPrint(const Seeds &seeds, const Anchors &anchors) const;
 
-    enum class SeedDecision
-    {
-        ACCEPT,
-        ACCEPT_AS_SELF,
-        SKIP,
-    };
+    void populateSeeds(Seeds &seeds, const Minimizers &minimizers) const;
+
+    void processedSelectedSeeds(Seeds &seeds, ErrEstimationData &err_data) const;
 
     SeedDecision decide(const Seeds::SeedHitRef ref_position, const Seeds::SeedHitQuery &query,
                         const string &query_name, const int total_query_len) const;

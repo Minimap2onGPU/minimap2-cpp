@@ -48,17 +48,4 @@ namespace IOTypes
     {
         return fragment_index.back();
     }
-
-    void MappingOutputData::FinalOutput::resize(const size_t size)
-    {
-        representative_lengths.resize(size);
-        fragment_gaps.resize(size);
-        regions.resize(size);
-    }
-
-    void MappingOutputData::IntermediateOutput::resize(const size_t size)
-    {
-        anchors.resize(size);
-        err_data.resize(size);
-    }
 }
