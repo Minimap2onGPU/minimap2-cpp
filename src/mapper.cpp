@@ -14,9 +14,11 @@ void Mapper::map(shared_ptr<MappingContext> ctx)
 
     // TODO: implement batching & thread-based memory pools
     // pools will process some contiguos batch of inputs, i.e. t1 [0, i), t2 [i, i2) and so on
+
     // current design is such that after batching some number of fragments/segments, rest of code can run in parallel
-    auto anchors = runVisitor<Seeder>(ctx, 0, max_end_index); // seed data fron ctx->input on range [0, max_end_index)
-    runVisitor<Chainer>(ctx, anchors, 0);
+    auto batch_anchors = runVisitor<Seeder>(ctx, 0, max_end_index); // seed data fron ctx->input on range [0, max_end_index)
+    // chain output from Seeder
+    auto batch_chains = runVisitor<Chainer>(ctx, batch_anchors, 0);
     // TODO: check if redo-seeding/chaining needed
     // TODO: alignment and store results somewhere (not designed yet, maybe a new struct in MappingContext, or return a custom type)
 

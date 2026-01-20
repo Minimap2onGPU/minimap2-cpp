@@ -13,6 +13,7 @@ using observer_ptr = const T *;
 
 namespace SeedTypes
 {
+    // Inherit this to use the different functions
     template <typename Derived>
     struct PositionAccessors
     {
@@ -60,7 +61,7 @@ namespace SeedTypes
             return (static_cast<uint64_t>(rid) << 32) | (static_cast<uint64_t>(pos) << 1) | (strand & 1);
         }
 
-        constexpr uint64_t get_data() const { return y; }
+        constexpr uint64_t get_data() const { return y; } // For PositionAccessors to work
 
         constexpr uint64_t hash() const { return x >> 8; }
         constexpr uint8_t span() const { return x & 0xFF; }
@@ -92,7 +93,7 @@ namespace SeedTypes
         {
             uint64_t data;
 
-            constexpr uint64_t get_data() const { return data; }
+            constexpr uint64_t get_data() const { return data; } // For PositionAccessors to work
         };
 
         // SeedHitQuery represents a query minimizer

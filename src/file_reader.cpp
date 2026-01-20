@@ -12,7 +12,7 @@ using std::istringstream;
 using std::make_shared;
 using std::string;
 
-shared_ptr<InputDataFragments> FileReader::readAllSegments(size_t max_data_size)
+shared_ptr<InputDataFragments> FileReader::readNextSegments(size_t num)
 {
     for (auto &filestream : filestreams)
     {
@@ -29,7 +29,7 @@ shared_ptr<InputDataFragments> FileReader::readAllSegments(size_t max_data_size)
     size_t total_size = 0, fragment_size = 0;
     vector<InputSegment> inputs(filestreams.size());
     int count = 0;
-    while (total_size < max_data_size)
+    while (total_size < num)
     {
         fragment_size = 0, count = 0;
         if (group_segments_by_name)

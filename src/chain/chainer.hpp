@@ -16,7 +16,7 @@ public:
     explicit Chainer(shared_ptr<MappingContext> ctx);
 
     /**
-     * @anchors: batch of anchors to chain, each batch independently
+     * @anchors: batch of anchors to chain
      * @offset: offset into input which produced these anchors
      */
     vector<Chains> visit(const vector<Anchors> &anchors, const int offset);

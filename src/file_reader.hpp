@@ -5,13 +5,13 @@
 #include <unordered_set>
 #include "types.hpp"
 
+using IOTypes::InputDataFragments;
+using IOTypes::InputSegment;
 using std::ifstream;
 using std::shared_ptr;
 using std::string;
 using std::unordered_set;
 using std::vector;
-using IOTypes::InputSegment;
-using IOTypes::InputDataFragments;
 
 struct FileReaderConfig
 {
@@ -48,10 +48,10 @@ public:
     FileReader(const vector<string> &files, const FileReaderConfig &config_in);
     ~FileReader();
 
-    // EFFECT: reads segments across files until maxData reached or eof reached
+    // EFFECT: reads next segments across files until num reached or eof reached
     // single file:
     //  - if fragment_mode, groups the same name reads into a single fragment
     // multi files:
     //  - ensures that each segment from each file is either all read, or all ignored
-    shared_ptr<InputDataFragments> readAllSegments(size_t max_data_size);
+    shared_ptr<InputDataFragments> readNextSegments(size_t num);
 };

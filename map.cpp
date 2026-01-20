@@ -1265,7 +1265,7 @@ static void *worker_pipeline(void *shared, int step, void *in)
 		start = std::chrono::high_resolution_clock::now();
 		////////
 		// make input
-		worker_data->input = p->file_reader->readAllSegments(p->mini_batch_size);
+		worker_data->input = p->file_reader->readNextSegments(p->mini_batch_size);
 		cout << "Done with modified: " << (std::chrono::high_resolution_clock::now() - start).count() << endl;
 		if (worker_data->input == nullptr)
 		{
