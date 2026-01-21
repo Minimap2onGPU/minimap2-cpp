@@ -23,6 +23,8 @@ void Mapper::map(shared_ptr<MappingContext> ctx)
     // TODO: alignment and store results somewhere (not designed yet, maybe a new struct in MappingContext, or return a custom type)
 
     reverseComplements(ctx); // TODO: need to also update Aligner results;
+
+    // TODO: return aligner results? or add to ctx?
 }
 
 void Mapper::reverseComplements(shared_ptr<MappingContext> ctx)

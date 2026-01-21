@@ -21,149 +21,6 @@
 #include "src/utils.hpp"
 #include <unordered_map>
 
-// TODO: rm this after testing
-static int64_t mg_chain_bk_end_test(int32_t max_drop, const mm128_t *z, const int32_t *f, const int64_t *p, int32_t *t, int64_t k)
-{
-	int64_t i = z[k].y, end_i = -1, max_i = i;
-	int32_t max_s = 0;
-	if (i < 0 || t[i] != 0)
-		return i;
-	do
-	{
-		int32_t s;
-		t[i] = 2;
-		end_i = i = p[i];
-		s = i < 0 ? z[k].x : (int32_t)z[k].x - f[i];
-		if (s > max_s)
-			max_s = s, max_i = i;
-		else if (max_s - s > max_drop)
-			break;
-	} while (i >= 0 && t[i] == 0);
-	for (i = z[k].y; i >= 0 && i != end_i; i = p[i]) // reset modified t[]
-		t[i] = 0;
-	return max_i;
-}
-
-// TODO: rm this after testing
-static uint64_t *mg_chain_backtrack_test(void *km, int64_t n, const int32_t *f, const int64_t *p, int32_t *v, int32_t *t, int32_t min_cnt, int32_t min_sc, int32_t max_drop, int32_t *n_u_, int32_t *n_v_)
-{
-	mm128_t *z;
-	uint64_t *u;
-	int64_t i, k, n_z, n_v;
-	int32_t n_u;
-
-	*n_u_ = *n_v_ = 0;
-	for (i = 0, n_z = 0; i < n; ++i) // precompute n_z
-		if (f[i] >= min_sc)
-			++n_z;
-	if (n_z == 0)
-		return 0;
-	z = Kmalloc(km, mm128_t, n_z);
-	for (i = 0, k = 0; i < n; ++i) // populate z[]
-		if (f[i] >= min_sc)
-			z[k].x = f[i], z[k++].y = i;
-	radix_sort_128x(z, z + n_z);
-
-	memset(t, 0, n * 4);
-	for (k = n_z - 1, n_v = n_u = 0; k >= 0; --k)
-	{ // precompute n_u
-		if (t[z[k].y] == 0)
-		{
-			int64_t n_v0 = n_v, end_i;
-			int32_t sc;
-			end_i = mg_chain_bk_end_test(max_drop, z, f, p, t, k);
-			for (i = z[k].y; i != end_i; i = p[i])
-				++n_v, t[i] = 1;
-			sc = i < 0 ? z[k].x : (int32_t)z[k].x - f[i];
-			if (sc >= min_sc && n_v > n_v0 && n_v - n_v0 >= min_cnt)
-				++n_u;
-			else
-				n_v = n_v0;
-		}
-	}
-
-	u = Kmalloc(km, uint64_t, n_u);
-	memset(t, 0, n * 4);
-	for (k = n_z - 1, n_v = n_u = 0; k >= 0; --k)
-	{ // populate u[]
-		if (t[z[k].y] == 0)
-		{
-			int64_t n_v0 = n_v, end_i;
-			int32_t sc;
-			end_i = mg_chain_bk_end_test(max_drop, z, f, p, t, k);
-			for (i = z[k].y; i != end_i; i = p[i])
-				v[n_v++] = i, t[i] = 1;
-			sc = i < 0 ? z[k].x : (int32_t)z[k].x - f[i];
-			if (sc >= min_sc && n_v > n_v0 && n_v - n_v0 >= min_cnt)
-				u[n_u++] = (uint64_t)sc << 32 | (n_v - n_v0);
-			else
-				n_v = n_v0;
-		}
-	}
-
-	assert(n_v < INT32_MAX);
-	*n_u_ = n_u, *n_v_ = n_v;
-
-	kfree(km, z);
-	return u;
-}
-
-// TODO: rm this after testing
-static mm128_t *compact_a_test(void *km, int32_t n_u, uint64_t *u, int32_t n_v, int32_t *v, mm128_t *a, Anchors &anchors)
-{
-	mm128_t *b, *w;
-	uint64_t *u2;
-	int64_t i, j, k;
-
-	for (int j = 0; j < anchors.size(); ++j)
-	{
-		assert(a[j].x == anchors[j].x);
-		assert((a[j].y >> 32) == (anchors[j].y >> 32));
-		assert((uint32_t)a[j].y == (uint32_t)anchors[j].y);
-	}
-
-	// write the result to b[]
-	b = Kmalloc(km, mm128_t, n_v);
-	for (i = 0, k = 0; i < n_u; ++i)
-	{
-		int32_t k0 = k, ni = (int32_t)u[i];
-		for (j = 0; j < ni; ++j)
-			b[k++] = a[v[k0 + (ni - j - 1)]];
-	}
-	kfree(km, v);
-
-	// sort u[] and a[] by the target position, such that adjacent chains may be joined
-	w = Kmalloc(km, mm128_t, n_u);
-	for (i = k = 0; i < n_u; ++i)
-	{
-		w[i].x = b[k].x, w[i].y = (uint64_t)k << 32 | i;
-		k += (int32_t)u[i];
-	}
-	radix_sort_128x(w, w + n_u);
-	u2 = Kmalloc(km, uint64_t, n_u);
-	for (i = k = 0; i < n_u; ++i)
-	{
-		int32_t j = (int32_t)w[i].y, n = (int32_t)u[j];
-		u2[i] = u[j];
-		memcpy(&a[k], &b[w[i].y >> 32], n * sizeof(mm128_t));
-		k += n;
-	}
-	memcpy(u, u2, n_u * 8);
-	memcpy(b, a, k * sizeof(mm128_t)); // write _a_ to _b_ and deallocate _a_ because _a_ is oversized, sometimes a lot
-	kfree(km, a);
-	kfree(km, w);
-	kfree(km, u2);
-	return b;
-}
-
-////////
-struct WorkerData
-{
-	shared_ptr<InputDataFragments> input;
-	shared_ptr<MappingContext> context;
-};
-////////
-
 using std::cout;
 using std::endl;
 using std::make_shared;
@@ -663,6 +520,7 @@ struct pipeline_t
 	uint32_t *rid_shift;
 	FILE *fp_split, **fp_parts;
 
+	// TODO: use this for C++ file reading
 	std::unique_ptr<FileReader> file_reader;
 };
 
@@ -674,19 +532,13 @@ typedef struct
 	int *n_reg, *seg_off, *n_seg, *rep_len, *frag_gap;
 	mm_reg1_t **reg;
 	mm_tbuf_t **buf;
-
-	// TODO: move this to its own struct initialized in step 0
-	WorkerData *tmp_worker_data;
 } step_t;
 
+// TODO: move this function to Mapper::map
 // map a single data for fragment i
 static void worker_for(void *_data, long i, int tid) // kt_for() callback
 {
 	step_t *s = (step_t *)_data;
-	////////
-	WorkerData *worker_data = s->tmp_worker_data; // NOTE: we temporarily flip outside the function
-	// TODO: test collect minimizer
-	////////
 	int qlens[MM_MAX_SEG], j, off = s->seg_off[i], pe_ori = s->p->opt->pe_ori;
 	const char *qseqs[MM_MAX_SEG];
 	double t = 0.0;
@@ -697,6 +549,7 @@ static void worker_for(void *_data, long i, int tid) // kt_for() callback
 		fprintf(stderr, "QR\t%s\t%d\t%d\n", s->seq[off].name, tid, s->seq[off].l_seq);
 		t = realtime();
 	}
+	// flip strands
 	for (j = 0; j < s->n_seg[i]; ++j)
 	{
 		if (s->n_seg[i] == 2 && ((j == 0 && (pe_ori >> 1 & 1)) || (j == 1 && (pe_ori & 1)))) // flip condition
@@ -704,21 +557,6 @@ static void worker_for(void *_data, long i, int tid) // kt_for() callback
 		qlens[j] = s->seq[off + j].l_seq;
 		qseqs[j] = s->seq[off + j].seq;
 	}
-	///// TODO: rm this once tested ///
-	auto validateFlipStrands = [&]()
-	{
-		for (j = 0; j < s->n_seg[i]; ++j)
-		{
-			assert(qseqs[j] == worker_data->input->segments.sequences[i]);
-			if (s->seq[off + j].qual != nullptr)
-			{
-				assert(s->seq[off + j].qual == worker_data->input->segments.qualities[i]);
-			}
-		}
-	};
-	validateFlipStrands();
-	///////////////////////////////
-
 	// actual seed, chain, align
 	if (s->p->opt->flag & MM_F_INDEPEND_SEG) // every segment considered on its own -> allocate intermediate outputs per segment
 	{
@@ -730,405 +568,7 @@ static void worker_for(void *_data, long i, int tid) // kt_for() callback
 		}
 	}
 	else // consider per fragment -> allocate intermediate outputs per fragment
-	{	 // NOTE: if opt->flag & MM_F_WEAK_PAIRING) && n_segs == 2 && opt->pe_ori >= 0 && (opt->flag & MM_F_CIGAR)
-		//  -> need to allocate per segment and not fragment
-		// TODO: rm after test
-		auto context = worker_data->context;
-		const auto &config = worker_data->context->config;
-		const auto &input = worker_data->context->input;
-		Seeder seeder(context);
-		int start_index = input->fragment_index[i];
-		int end_index = input->fragment_index[i + 1];
-
-		int qlen_sum_old = 0, qlen_sum = input->fragment_lengths[i];
-		for (int j = 0; j < s->n_seg[i]; ++j)
-		{
-			qlen_sum_old += qlens[j];
-		}
-		assert(qlen_sum_old == qlen_sum);
-
-		auto opt = s->p->opt;
-		auto mi = s->p->mi;
-
-		// TEST Minimizers + filters
-		// C
-		mm128_v mv = {0, 0, 0};
-		collect_minimizers(nullptr, opt, mi, s->n_seg[i], qlens, qseqs, &mv);
-		mm_seed_mz_flt(nullptr, &mv, opt->mid_occ, opt->q_occ_frac);
-		// C++
-		auto minimizers = seeder.collectMinimizers(start_index, end_index, qlen_sum);
-		seeder.filters.minimizer_freq.filter(minimizers,
-											 config.seed_cfg.seed_occurrence_threshold,
-											 config.seed_cfg.query_occurrence_fraction);
-		// test
-		assert(minimizers.size() == mv.n);
-		for (int j = 0; j < minimizers.size(); ++j)
-		{
-			assert(mv.a[j].x == minimizers[j].x);
-			assert(mv.a[j].y == minimizers[j].y);
-		}
-		////////////////
-		// TEST matches
-		// C
-		int64_t n_a;
-		int rep_len, n_mini_pos;
-		uint64_t *mini_pos;
-		mm_seed_t *m;
-		mm128_t *c_anchors = nullptr;
-		int n_m;
-		m = mm_collect_matches(nullptr, &n_m, qlen_sum, opt->mid_occ, opt->max_max_occ, opt->occ_dist, mi, &mv, &n_a, &rep_len, &n_mini_pos, &mini_pos);
-		// C++
-		auto [seeds, err_data] = seeder.collectMatches(minimizers, qlen_sum);
-		// test
-		assert(n_m == (int)seeds.queries.size());
-		assert(rep_len == seeds.repetitive_length);
-		for (int j = 0; j < (int)seeds.queries.size(); ++j)
-		{
-			// counts
-			assert(m[j].n == seeds.ref_counts[j]);
-
-			// individual vals
-			assert(m[j].q_pos == (((uint32_t)seeds.queries[j].query_pos << 1) | seeds.queries[j].strand()));
-			assert(m[j].q_span == (uint32_t)seeds.queries[j].span());
-			assert(m[j].seg_id == (uint32_t)seeds.queries[j].seg_id);
-			assert(m[j].is_tandem == (uint32_t)seeds.queries[j].isTandem());
-			assert(m[j].flt == (uint32_t)seeds.queries[j].filter());
-
-			// references
-			for (int k = 0; k < m[j].n; ++k)
-			{
-				assert(m[j].cr[k] == seeds.refs[j][k].get_data());
-			}
-		}
-
-		// test seed_hits
-		// C
-		if (opt->flag & MM_F_HEAP_SORT)
-		{
-			c_anchors = collect_seed_hits_heap(nullptr, opt, opt->mid_occ, mi, s->seq[off].name,
-											   &mv, qlen_sum, &n_a, &rep_len, &n_mini_pos, &mini_pos);
-		}
-		else
-		{
-			c_anchors = collect_seed_hits(nullptr, opt, opt->mid_occ, mi, s->seq[off].name,
-										  &mv, qlen_sum, &n_a, &rep_len, &n_mini_pos, &mini_pos);
-		}
-		// C++
-		auto anchors = config.isFlagSet(FlagBits::USE_HEAP_SORT)
-						   ? seeder.collectAnchorsHeap(seeds, input->segments.names[start_index], qlen_sum)
-						   : seeder.collectAnchors(seeds, input->segments.names[start_index], qlen_sum);
-		// TEST
-		assert(n_a == anchors.size());
-		vector<pair<uint64_t, uint64_t>> anchor_vec;
-		for (int j = 0; j < anchors.size(); ++j)
-		{
-			anchor_vec.emplace_back(c_anchors[j].x, c_anchors[j].y);
-		}
-		for (int j = 0; j < anchors.size(); ++j)
-		{
-			assert(anchor_vec[j].first == anchors[j].x);
-			assert((anchor_vec[j].second >> 32) == (anchors[j].y >> 32));
-			assert((uint32_t)anchor_vec[j].second == (uint32_t)anchors[j].y);
-		}
-		/////////////
-		if (config.isFlagSet(FlagBits::SEED_DEBUG_MODE))
-		{
-			seeder.debugPrint(seeds, anchors); // TODO: test this
-		}
-
-		// chain config
-		// C-version
-		int n_regs0 = 0, n_segs;
-		uint64_t *u = nullptr;
-		auto a = c_anchors;
-		int max_chain_gap_qry, max_chain_gap_ref_old;
-		bool is_splice = !!(opt->flag & MM_F_SPLICE);
-		bool is_sr = !!(opt->flag & MM_F_SR);
-
-		if (is_sr)
-			max_chain_gap_qry = qlen_sum > opt->max_gap ? qlen_sum : opt->max_gap;
-		else
-			max_chain_gap_qry = opt->max_gap;
-
-		if (opt->max_gap_ref > 0)
-		{
-			max_chain_gap_ref_old = opt->max_gap_ref; // always honor mm_mapopt_t::max_gap_ref if set
-		}
-		else if (opt->max_frag_len > 0)
-		{
-			max_chain_gap_ref_old = opt->max_frag_len - qlen_sum;
-			if (max_chain_gap_ref_old < opt->max_gap)
-				max_chain_gap_ref_old = opt->max_gap;
-		}
-		else
-			max_chain_gap_ref_old = opt->max_gap;
-
-		float chn_pen_gap = opt->chain_gap_scale * 0.01 * mi->k;
-		float chn_pen_skip = opt->chain_skip_scale * 0.01 * mi->k;
-		// C++
-		const auto &chain_cfg = config.chain_cfg;
-		Chainer chainer(worker_data->context);
-		Chainer::ChainParams chain_params{
-			.is_cdna = config.isFlagSet(FlagBits::SPLICE_MODE),
-			.num_segments = -1,
-			.max_query_gap = -1,
-			.max_ref_gap = -1,
-			.bandwidth = chain_cfg.bandwidth,
-			.bandwidth_long = chain_cfg.bandwidth_long,
-			.max_skip = chain_cfg.max_skip,
-			.max_predecessors = chain_cfg.max_predecessors,
-			.min_chain_anchors = chain_cfg.min_chain_anchors,
-			.min_chain_score = chain_cfg.min_chain_score,
-			.chain_penalty_gap = chain_cfg.chain_gap_scale * 0.01f * context->mm2_index->k,
-			.chain_penalty_skip = chain_cfg.chain_skip_scale * 0.01f * context->mm2_index->k,
-			.chain_skip_scale = chain_cfg.chain_skip_scale};
-
-		auto setChainParams = [&](const int curr_query_len, const int num_segments)
-		{
-			if (config.isFlagSet(FlagBits::SHORT_READ))
-			{
-				chain_params.max_query_gap = std::max(curr_query_len, chain_cfg.max_query_gap);
-			}
-			else
-			{
-				chain_params.max_query_gap = chain_cfg.max_query_gap;
-			}
-
-			if (chain_cfg.max_ref_gap > 0)
-			{
-				chain_params.max_ref_gap = chain_cfg.max_ref_gap; // always honor max_chain_gap_ref if set
-			}
-			else if (chain_cfg.max_fragment_length > 0)
-			{
-				chain_params.max_ref_gap = std::max(chain_cfg.max_fragment_length - curr_query_len,
-													chain_cfg.max_query_gap);
-			}
-			else
-			{
-				chain_params.max_ref_gap = chain_cfg.max_query_gap;
-			}
-			chain_params.num_segments = config.isFlagSet(FlagBits::INDEPENDENT_SEGMENTS) ? 1 : num_segments;
-			// test params are set
-			assert(chain_params.chain_penalty_gap == chn_pen_gap);
-			assert(chain_params.chain_penalty_skip == chn_pen_skip);
-			assert(chain_params.max_query_gap == max_chain_gap_qry);
-			assert(chain_params.max_ref_gap == max_chain_gap_ref_old);
-			assert(chain_params.is_cdna == is_splice);
-			assert(chain_params.num_segments == s->n_seg[i]);
-			assert(chain_params.bandwidth == opt->bw);
-			assert(chain_params.bandwidth_long == chain_cfg.bandwidth_long);
-			assert(chain_params.max_skip == opt->max_chain_skip);
-			assert(chain_params.max_predecessors == opt->max_chain_iter);
-			assert(chain_params.min_chain_anchors == opt->min_cnt);
-			assert(chain_params.min_chain_score == opt->min_chain_score);
-			assert(chain_params.chain_skip_scale == opt->chain_skip_scale);
-		};
-
-		setChainParams(qlen_sum, input->getNumsegmentsInFragment(i));
-		auto comput_sc = [&](const mm128_t *ai, const mm128_t *aj, int32_t max_dist_x, int32_t max_dist_y, int32_t bw, float chn_pen_gap, float chn_pen_skip, int is_cdna, int n_seg)
-		{
-			int32_t dq = (int32_t)ai->y - (int32_t)aj->y, dr, dd, dg, q_span, sc;
-			int32_t sidi = (ai->y & MM_SEED_SEG_MASK) >> MM_SEED_SEG_SHIFT;
-			int32_t sidj = (aj->y & MM_SEED_SEG_MASK) >> MM_SEED_SEG_SHIFT;
-			if (dq <= 0 || dq > max_dist_x)
-				return INT32_MIN;
-			dr = (int32_t)(ai->x - aj->x);
-			if (sidi == sidj && (dr == 0 || dq > max_dist_y))
-				return INT32_MIN;
-			dd = dr > dq ? dr - dq : dq - dr;
-			if (sidi == sidj && dd > bw)
-				return INT32_MIN;
-			if (n_seg > 1 && !is_cdna && sidi == sidj && dr > max_dist_y)
-				return INT32_MIN;
-			dg = dr < dq ? dr : dq;
-			q_span = aj->y >> 32 & 0xff;
-			sc = q_span < dg ? q_span : dg;
-			if (dd || dg > q_span)
-			{
-				float lin_pen, log_pen;
-				lin_pen = chn_pen_gap * (float)dd + chn_pen_skip * (float)dg;
-				log_pen = dd >= 1 ? mg_log2(dd + 1) : 0.0f; // mg_log2() only works for dd>=2
-				if (is_cdna || sidi != sidj)
-				{
-					if (sidi != sidj && dr == 0)
-						++sc; // possibly due to overlapping paired ends; give a minor bonus
-					else if (dr > dq || sidi != sidj)
-						sc -= (int)(lin_pen < log_pen ? lin_pen : log_pen); // deletion or jump between paired ends
-					else
-						sc -= (int)(lin_pen + .5f * log_pen);
-				}
-				else
-					sc -= (int)(lin_pen + .5f * log_pen);
-			}
-			return sc;
-		};
-
-		auto test_chain_dp = [&](int max_dist_x, int max_dist_y, int bw, int max_skip, int max_iter, int min_cnt, int min_sc, float chn_pen_gap, float chn_pen_skip, int is_cdna, int n_seg, int64_t n, mm128_t *a, int *n_u_, uint64_t **_u, void *km) { // TODO: make sure this works when n has more than 32 bits
-			int32_t *f, *t, *v, n_u, n_v, mmax_f = 0, max_drop = bw;
-			int64_t *p, idx, j, max_ii, st = 0;
-			uint64_t *u;
-
-			if (_u)
-				*_u = 0, *n_u_ = 0;
-			if (n == 0 || a == 0)
-			{
-				kfree(km, a);
-			}
-			else
-			{
-				if (max_dist_x < bw)
-					max_dist_x = bw;
-				if (max_dist_y < bw && !is_cdna)
-					max_dist_y = bw;
-				if (is_cdna)
-					max_drop = INT32_MAX;
-				p = Kmalloc(km, int64_t, n);
-				f = Kmalloc(km, int32_t, n);
-				v = Kmalloc(km, int32_t, n);
-				t = Kcalloc(km, int32_t, n);
-
-				// fill the score and backtrack arrays
-				for (idx = 0, max_ii = -1; idx < n; ++idx)
-				{
-					int64_t max_j = -1, end_j;
-					int32_t max_f = a[idx].y >> 32 & 0xff, n_skip = 0;
-					while (st < idx && (a[idx].x >> 32 != a[st].x >> 32 || a[idx].x > a[st].x + max_dist_x))
-						++st;
-					if (idx - st > max_iter)
-						st = idx - max_iter;
-					for (j = idx - 1; j >= st; --j)
-					{
-						int32_t sc;
-						sc = comput_sc(&a[idx], &a[j], max_dist_x, max_dist_y, bw, chn_pen_gap, chn_pen_skip, is_cdna, n_seg);
-						if (sc == INT32_MIN)
-							continue;
-						sc += f[j];
-						if (sc > max_f)
-						{
-							max_f = sc, max_j = j;
-							if (n_skip > 0)
-								--n_skip;
-						}
-						else if (t[j] == (int32_t)idx)
-						{
-							if (++n_skip > max_skip)
-								break;
-						}
-						if (p[j] >= 0)
-							t[p[j]] = idx;
-					}
-					end_j = j;
-					if (max_ii < 0 || a[idx].x - a[max_ii].x > (int64_t)max_dist_x)
-					{
-						int32_t max = INT32_MIN;
-						max_ii = -1;
-						for (j = idx - 1; j >= st; --j)
-							if (max < f[j])
-								max = f[j], max_ii = j;
-					}
-					if (max_ii >= 0 && max_ii < end_j)
-					{
-						int32_t tmp;
-						tmp = comput_sc(&a[idx], &a[max_ii], max_dist_x, max_dist_y, bw, chn_pen_gap, chn_pen_skip, is_cdna, n_seg);
-						if (tmp != INT32_MIN && max_f < tmp + f[max_ii])
-							max_f = tmp + f[max_ii], max_j = max_ii;
-					}
-					f[idx] = max_f, p[idx] = max_j;
-					v[idx] = max_j >= 0 && v[max_j] > max_f ? v[max_j] : max_f;
-					if (max_ii < 0 || (a[idx].x - a[max_ii].x <= (int64_t)max_dist_x && f[max_ii] < f[idx]))
-						max_ii = idx;
-					if (mmax_f < max_f)
-						mmax_f = max_f;
-				}
-
-				assert(n == anchors.size());
-				// const size_t num_anchors = n;
-				// // test that dp returns the same values
-				// Chainer::ScratchBuffers view(anchors.size());
-				// if (context->config.isFlagSet(FlagBits::CHAIN_RMQ_MODE))
-				// {
-				// 	// If the RMQ mode is set, call the RMQ-style chaining
-				// 	// e.g., computeAnchorRMQ(anchors, params, best_score, predecessor);
-				// }
-				// else
-				// {
-				// 	// Otherwise, use the normal DP-based chaining
-				// 	chainer.computeDP(anchors, chain_params, view);
-				// }
-				// Chainer::ScratchBuffers view_old(anchors.size());
-				// for (size_t k = 0; k < num_anchors; ++k)
-				// {
-				// 	view_old.best_score[k] = f[k];
-				// 	view_old.predecessor[k] = p[k];
-				// 	view_old.visited[k] = t[k];
-				// }
-
-				// for (size_t k = 0; k < num_anchors; ++k)
-				// {
-				// 	assert(view_old.best_score[k] == view.best_score[k]);
-				// 	assert(view_old.predecessor[k] == view.predecessor[k]);
-				// 	assert(view_old.visited[k] == view.visited[k]);
-				// }
-
-				u = mg_chain_backtrack_test(km, n, f, p, v, t, min_cnt, min_sc, max_drop, &n_u, &n_v);
-				*n_u_ = n_u, *_u = u; // NB: note that u[] may not be sorted by score here
-				kfree(km, p);
-				kfree(km, f);
-				kfree(km, t);
-				if (n_u == 0)
-				{
-					kfree(km, a);
-					kfree(km, v);
-				}
-				else
-				{
-					a = compact_a_test(km, n_u, u, n_v, v, a, anchors);
-				}
-				auto new_seeds = seeder.visit(i, i + 1);
-				assert(anchor_vec.size() == new_seeds[0].size());
-				for (int j = 0; j < new_seeds[0].size(); ++j)
-				{
-					assert(anchor_vec[j].first == new_seeds[0][j].x);
-					assert((anchor_vec[j].second >> 32) == (new_seeds[0][j].y >> 32));
-					assert((uint32_t)anchor_vec[j].second == (uint32_t)new_seeds[0][j].y);
-				}
-				auto result = chainer.visit(new_seeds, i)[0]; // chainer.backtrackChains(std::move(anchors), chain_params, view);
-
-				assert(result.anchors.size() == n_v);
-				std::vector<pair<uint64_t, uint64_t>> tmp_a;
-				for (int j = 0; j < result.anchors.size(); ++j)
-				{
-					tmp_a.emplace_back(a[j].x, a[j].y);
-				}
-				for (int j = 0; j < result.anchors.size(); ++j)
-				{
-					assert(tmp_a[j].first == result.anchors[j].x);
-					assert(tmp_a[j].second == result.anchors[j].y);
-					if (j == 0)
-					{
-						cout << "comparing chains\n";
-					}
-				}
-				assert(result.scores.size() == result.anchor_indices.size() - 1 || (result.scores.size() == result.anchor_indices.size() && result.anchor_indices.size() == 0));
-				assert(result.scores.size() == n_u);
-				for (int j = 0; j < result.scores.size(); ++j)
-				{
-					assert(result.scores[j] == (u[j] >> 32));
-					assert(result.anchor_indices[j + 1] == (uint32_t)u[j]);
-				}
-			}
-		};
-
-		test_chain_dp(max_chain_gap_ref_old, max_chain_gap_qry, opt->bw,
-					  opt->max_chain_skip, opt->max_chain_iter,
-					  opt->min_cnt, opt->min_chain_score,
-					  chn_pen_gap, chn_pen_skip,
-					  is_splice ? 1 : 0,
-					  s->n_seg[i],
-					  n_a, a, &n_regs0, &u, nullptr);
-
-		//////////////////////////
-		cout << "mm_frag: " << i << '\n';
+	{	 // NOTE: if opt->flag & MM_F_WEAK_PAIRING) && n_segs == 2 && opt->pe_ori >= 0 && (opt->flag & MM_F_CIGAR) -> need to allocate per segment and not fragment
 		mm_map_frag(s->p->mi, s->n_seg[i], qlens, qseqs, &s->n_reg[off], &s->reg[off], b, s->p->opt, s->seq[off].name);
 		for (j = 0; j < s->n_seg[i]; ++j)
 		{
@@ -1237,22 +677,24 @@ static void merge_hits(step_t *s)
 	km_destroy(km);
 }
 
+// TODO: replace step_t with custom struct that has MappingContext and output
+// MappingContext is created in step 0 and passed to step 1
+// output is created in step 1 and passed to step 2
 static void *worker_pipeline(void *shared, int step, void *in)
 {
 	int i, j, k;
 	pipeline_t *p = (pipeline_t *)shared;
 	if (step == 0)
 	{ // step 0: read sequences
+		/*
+		TODO: use FileReader once mapping is done
+		shared_ptr<InputDataFragments> input = p->file_reader->readNextSegments(n);
+		*/
 		int with_qual = (!!(p->opt->flag & MM_F_OUT_SAM) && !(p->opt->flag & MM_F_NO_QUAL));
 		int with_comment = !!(p->opt->flag & MM_F_COPY_COMMENT);
 		int frag_mode = (p->n_fp > 1 || !!(p->opt->flag & MM_F_FRAG_MODE));
 		step_t *s;
 		s = (step_t *)calloc(1, sizeof(step_t));
-		/////////
-		auto worker_data = new WorkerData(); // TODO: change to smart ptr once kt_pipeline fixed
-		/////////
-		cout << "reading files\n\n";
-		auto start = std::chrono::high_resolution_clock::now();
 		if (p->n_fp > 1)
 		{
 			s->seq = mm_bseq_read_frag2(p->n_fp, p->fp, p->mini_batch_size, with_qual, with_comment, &s->n_seq);
@@ -1261,78 +703,6 @@ static void *worker_pipeline(void *shared, int step, void *in)
 		{
 			s->seq = mm_bseq_read3(p->fp[0], p->mini_batch_size, with_qual, with_comment, frag_mode, &s->n_seq);
 		}
-		cout << "Done with regular: " << (std::chrono::high_resolution_clock::now() - start).count() << endl;
-		start = std::chrono::high_resolution_clock::now();
-		////////
-		// make input
-		worker_data->input = p->file_reader->readNextSegments(p->mini_batch_size);
-		cout << "Done with modified: " << (std::chrono::high_resolution_clock::now() - start).count() << endl;
-		if (worker_data->input == nullptr)
-		{
-			free(s);
-			return 0;
-		}
-		////////
-		cout << worker_data->input->segments.sequences.size() << endl;
-		auto validateRes = [&]
-		{
-			assert(worker_data->input->segments.sequences.size() == s->n_seq);
-			for (int i = 0; i < worker_data->input->segments.sequences.size(); ++i)
-			{
-				assert(s->seq[i].seq == worker_data->input->segments.sequences[i]);
-				if (s->seq[i].name != nullptr)
-				{
-					assert(s->seq[i].name == worker_data->input->segments.names[i]);
-				}
-				if (s->seq[i].comment != nullptr)
-				{
-					assert(s->seq[i].comment == worker_data->input->segments.comments[i]);
-				}
-				if (s->seq[i].qual != nullptr)
-				{
-					assert(s->seq[i].qual == worker_data->input->segments.qualities[i]);
-				}
-			}
-		};
-		validateRes();
-		// C++ implementation is about 25% faster than the C implementation in reading
-		// NOTE: this is only true when O3 and DNDEBUG flag
-		/////////
-		if (worker_data->input != nullptr)
-		{
-			size_t total_segments = worker_data->input->segments.sequences.size();
-		}
-		// init map context
-		auto opt = p->opt;
-		MapperConfig cfg = {
-			.flags = p->opt->flag,
-			.paired_end_orientation = bitset<2>(opt->pe_ori),
-			.seed_cfg = MapperConfig::SeederConfig{
-				.query_occurrence_fraction = opt->q_occ_frac,
-				.seed_occurrence_threshold = opt->mid_occ,
-				.hard_seed_occurrence_threshold = opt->max_max_occ,
-				.seed_occurrence_distance = opt->occ_dist,
-				.sdust_threshold = opt->sdust_thres,
-			},
-			.chain_cfg = MapperConfig::ChainerConfig{
-				.max_query_gap = opt->max_gap,
-				.max_ref_gap = opt->max_gap_ref,
-				.max_fragment_length = opt->max_frag_len,
-				.max_skip = opt->max_chain_skip,
-				.max_predecessors = opt->max_chain_iter,
-				.bandwidth = opt->bw,
-				.bandwidth_long = opt->bw_long,
-				.min_chain_anchors = opt->min_cnt,
-				.min_chain_score = opt->min_chain_score,
-				.chain_gap_scale = opt->chain_gap_scale,
-				.chain_skip_scale = opt->chain_skip_scale,
-			}};
-		worker_data->context = make_shared<MappingContext>(
-			cfg,
-			shared_ptr<mm_idx_t>(const_cast<mm_idx_t *>(p->mi), [](mm_idx_t *) {}),
-			worker_data->input);
-
-		/////////
 		if (s->seq)
 		{
 			s->p = p;
@@ -1354,17 +724,6 @@ static void *worker_pipeline(void *shared, int step, void *in)
 					s->seg_off[s->n_frag++] = j;
 					j = i;
 				}
-
-			auto validateSegments = [&]()
-			{
-				for (int i = 0; i < worker_data->input->fragment_index.size() - 1; ++i)
-				{
-					assert(worker_data->input->fragment_index[i] == s->seg_off[i]);
-					assert(worker_data->input->getNumsegmentsInFragment(i) == s->n_seg[i]);
-				}
-			};
-			validateSegments();
-			s->tmp_worker_data = worker_data;
 			return s;
 		}
 		else
@@ -1373,20 +732,12 @@ static void *worker_pipeline(void *shared, int step, void *in)
 	else if (step == 1)
 	{ // step 1: map
 		if (p->n_parts > 0)
-			merge_hits((step_t *)in);
+			merge_hits((step_t *)in); // TODO: this function has yet to be designed in C++
 		else
 		{
-
+			// TODO: this needs to be changed to Mapper::map(context)
 			auto data = (step_t *)in;
-			// TODO: rm once done with test -> tmp reverse all paired_end reads
-			Mapper mapper;
-			mapper.reverseComplements(data->tmp_worker_data->context);
-			///////////////
 			kt_for(p->n_threads, worker_for, data, data->n_frag);
-
-			// auto tmp_worker = data->tmp_worker_data;
-
-			// mapper.map(tmp_worker->context);
 		}
 
 		return in;
@@ -1511,7 +862,7 @@ int mm_map_file_frag(const mm_idx_t *idx, int n_segs, const char **fn, const mm_
 		return -1;
 	memset(&pl, 0, sizeof(pipeline_t));
 
-	////////
+	/* TODO: use this for C++ version of file reading
 	std::vector<std::string> files(fn, fn + n_segs);
 	FileReaderConfig config = {
 		.enable_quality = opt->flag & MM_F_OUT_SAM && !(opt->flag & MM_F_NO_QUAL),
@@ -1519,8 +870,7 @@ int mm_map_file_frag(const mm_idx_t *idx, int n_segs, const char **fn, const mm_
 		.fragment_mode = opt->flag & MM_F_FRAG_MODE,
 	};
 	pl.file_reader = make_unique<FileReader>(files, config);
-	////////
-	// FUTURE WORK: clean up pipeline approach?
+	*/
 	pl.n_fp = n_segs;
 	pl.fp = open_bseqs(pl.n_fp, fn);
 	if (pl.fp == 0)
